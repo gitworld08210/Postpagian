@@ -1,0 +1,57 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">Pigeon Post</string>
+
+    <!-- Splash Screen -->
+    <string name="splash_title">Pigeon Post</string>
+    <string name="splash_subtitle">Messages delivered by wing</string>
+    <string name="splash_established">Est. MMXXIV</string>
+
+    <!-- Login Screen -->
+    <string name="login_title">Enter the Aviary</string>
+    <string name="signup_title">Join the Messenger Guild</string>
+    <string name="email_label">Thy Electronic Address</string>
+    <string name="password_label">Secret Passphrase</string>
+    <string name="login_button">Break Seal &amp; Enter</string>
+    <string name="signup_button">Seal &amp; Register</string>
+    <string name="toggle_to_signup">New messenger? Join the Guild</string>
+    <string name="toggle_to_login">Already a member? Enter the Aviary</string>
+
+    <!-- Conversations -->
+    <string name="conversations_title">The Aviary</string>
+    <string name="no_conversations">No scrolls await thee</string>
+    <string name="no_conversations_hint">Begin a correspondence to dispatch thy first pigeon</string>
+    <string name="sign_out">Depart the Aviary</string>
+
+    <!-- Chat -->
+    <string name="message_input_hint">Inscribe thy message...</string>
+    <string name="send_button">Release Pigeon</string>
+    <string name="message_flying">Pigeon en route...</string>
+    <string name="message_delivered">Delivered by faithful pigeon</string>
+    <string name="message_lost">Lost in transit - pigeon perished</string>
+    <string name="view_on_map">Track Pigeon</string>
+
+    <!-- Map Screen -->
+    <string name="map_title">Pigeon Tracker</string>
+    <string name="pigeon_flying_status">Thy pigeon soars through the skies</string>
+    <string name="pigeon_delivered_status">Message delivered by faithful pigeon!</string>
+    <string name="pigeon_lost_status">Alas! Thy pigeon has perished in transit</string>
+
+    <!-- Notifications -->
+    <string name="notification_delivered_title">A pigeon has arrived!</string>
+    <string name="notification_delivered_body">Message delivered by faithful pigeon from %1$s</string>
+    <string name="notification_lost_title">Alas! Your pigeon has perished</string>
+    <string name="notification_lost_body">Your message to %1$s was lost in transit. The pigeon did not survive the journey.</string>
+    <string name="notification_channel_delivery">Pigeon Deliveries</string>
+    <string name="notification_channel_lost">Lost Pigeons</string>
+
+    <!-- Message Status -->
+    <string name="status_flying">Your pigeon has departed</string>
+    <string name="status_delivered">Message delivered by faithful pigeon</string>
+    <string name="status_lost">Alas! Your pigeon has perished</string>
+
+    <!-- General -->
+    <string name="back">Back</string>
+    <string name="error_generic">Something went awry in the aviary</string>
+    <string name="loading">Preparing thy scroll...</string>
+</resources>
