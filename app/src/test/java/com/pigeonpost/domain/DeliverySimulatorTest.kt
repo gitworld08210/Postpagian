@@ -61,7 +61,7 @@ class DeliverySimulatorTest {
     // --- Fate assignment -----------------------------------------------------
 
     @Test
-    fun `fate assignment dooms roughly seven percent of pigeons`() {
+    fun `fate assignment dooms roughly twenty percent of pigeons`() {
         val trials = 20_000
         val random = Random(20240521)
         val doomed = (0 until trials).count { simulator.assignDeathProgress(random) != null }
@@ -79,7 +79,7 @@ class DeliverySimulatorTest {
     fun `surviving pigeon gets a null death point`() {
         val neverDieRandom = object : Random() {
             override fun nextBits(bitCount: Int): Int = 0
-            override fun nextDouble(): Double = 0.99 // above the 7% threshold
+            override fun nextDouble(): Double = 0.99 // above the 20% threshold
         }
 
         assertNull(simulator.assignDeathProgress(neverDieRandom))
@@ -87,7 +87,7 @@ class DeliverySimulatorTest {
 
     @Test
     fun `doomed pigeon gets a death point inside the route`() {
-        // First draw dooms the bird (below the 7% threshold), second picks where it falls.
+        // First draw dooms the bird (below the 20% threshold), second picks where it falls.
         val scriptedRandom = scriptedRandom(0.01, 0.5)
 
         val deathAt = simulator.assignDeathProgress(scriptedRandom)

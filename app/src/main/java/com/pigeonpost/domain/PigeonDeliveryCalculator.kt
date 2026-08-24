@@ -10,7 +10,7 @@ import kotlin.random.Random
  * and whether the pigeon dies during transit.
  *
  * Pigeon speed: 60 km/h
- * Death probability: 7% base chance per delivery
+ * Death probability: 20% base chance per delivery
  */
 @Singleton
 class PigeonDeliveryCalculator @Inject constructor() {
@@ -19,8 +19,8 @@ class PigeonDeliveryCalculator @Inject constructor() {
         /** Pigeon flight speed in km/h */
         const val PIGEON_SPEED_KMH = 60.0
 
-        /** Base probability of pigeon death per delivery (7%) */
-        const val DEATH_PROBABILITY = 0.07
+        /** Base probability of pigeon death per delivery (20%) */
+        const val DEATH_PROBABILITY = 0.20
 
         // Example: LA to NYC coordinates
         const val LA_LAT = 34.0522
@@ -57,7 +57,7 @@ class PigeonDeliveryCalculator @Inject constructor() {
 
     /**
      * Determines if the pigeon dies during this delivery.
-     * Uses a 7% base chance (between 5-10% range).
+     * Uses a 20% base chance.
      * @param random Random instance for testability.
      */
     fun doesPigeonDie(random: Random = Random): Boolean {

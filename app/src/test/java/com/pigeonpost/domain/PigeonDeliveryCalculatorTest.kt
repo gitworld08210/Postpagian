@@ -58,8 +58,8 @@ class PigeonDeliveryCalculatorTest {
     }
 
     @Test
-    fun `pigeon death probability is 7 percent`() {
-        // Run 10000 trials and verify death rate is approximately 7%
+    fun `pigeon death probability is 20 percent`() {
+        // Run 10000 trials and verify death rate is approximately 20%
         val trials = 10000
         var deaths = 0
         val random = Random(42)
@@ -71,16 +71,16 @@ class PigeonDeliveryCalculatorTest {
         }
 
         val deathRate = deaths.toDouble() / trials
-        // Allow tolerance: between 5% and 10% (the acceptable range)
+        // Allow tolerance: between 17% and 23%
         assertTrue(
-            "Death rate should be between 5% and 10%, was ${deathRate * 100}%",
-            deathRate in 0.05..0.10
+            "Death rate should be between 17% and 23%, was ${deathRate * 100}%",
+            deathRate in 0.17..0.23
         )
     }
 
     @Test
     fun `pigeon always dies with random that always returns below threshold`() {
-        // Random that always returns 0.0 (below 0.07 threshold)
+        // Random that always returns 0.0 (below 0.20 threshold)
         val alwaysDieRandom = Random(0)
         // Use a fixed check
         val dies = 0.0 < PigeonDeliveryCalculator.DEATH_PROBABILITY
@@ -89,7 +89,7 @@ class PigeonDeliveryCalculatorTest {
 
     @Test
     fun `pigeon never dies with random that always returns above threshold`() {
-        // Check: values above 0.07 should not trigger death
+        // Check: values above 0.20 should not trigger death
         val survives = 0.5 >= PigeonDeliveryCalculator.DEATH_PROBABILITY
         assertTrue("Pigeon should survive when random returns 0.5", survives)
     }
@@ -157,8 +157,8 @@ class PigeonDeliveryCalculatorTest {
     }
 
     @Test
-    fun `death probability is 7 percent constant`() {
-        assertEquals(0.07, PigeonDeliveryCalculator.DEATH_PROBABILITY, 0.0)
+    fun `death probability is 20 percent constant`() {
+        assertEquals(0.20, PigeonDeliveryCalculator.DEATH_PROBABILITY, 0.0)
     }
 
     @Test
