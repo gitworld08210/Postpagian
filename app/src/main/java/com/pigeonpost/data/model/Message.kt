@@ -29,5 +29,13 @@ data class Message(
     @SerialName("pigeon_current_lng")
     val pigeonCurrentLng: Double = 0.0,
     @SerialName("attachment_url")
-    val attachmentUrl: String? = null
+    val attachmentUrl: String? = null,
+    /**
+     * Fraction of the route (0.0..1.0) at which this pigeon perishes, decided once
+     * by the sender when the message is created. `null` means the pigeon survives
+     * the whole journey. Every client derives the same fate from this value, so a
+     * pigeon is never resurrected nor re-killed by re-rolling the dice.
+     */
+    @SerialName("death_at_progress")
+    val deathAtProgress: Double? = null
 )

@@ -107,6 +107,9 @@ dependencies {
     implementation(libs.play.services.location)
     implementation(libs.play.services.maps)
 
+    // OpenStreetMap map tiles (osmdroid) - needs no API key
+    implementation(libs.osmdroid.android)
+
     // Testing
     testImplementation(libs.junit)
     testImplementation(libs.kotlinx.coroutines.test)

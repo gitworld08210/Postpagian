@@ -3,7 +3,6 @@ package com.pigeonpost.ui.screens.map
 import androidx.lifecycle.SavedStateHandle
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
-import com.pigeonpost.data.model.Message
 import com.pigeonpost.data.model.MessageStatus
 import com.pigeonpost.data.repository.MessageRepository
 import com.pigeonpost.domain.DeliverySimulator
@@ -26,6 +25,7 @@ data class PigeonMapUiState(
     val progress: Double = 0.0,
     val status: MessageStatus = MessageStatus.FLYING,
     val estimatedHoursRemaining: Double = 0.0,
+    val distanceKm: Double = 0.0,
     val isLoading: Boolean = true,
     val error: String? = null
 )
@@ -48,13 +48,13 @@ class PigeonMapViewModel @Inject constructor(
     }
 
     /**
-     * Loads the message from the repository and calculates the current pigeon position
-     * based on elapsed time since the message was sent.
+     * Loads the message and tracks it against the real wall clock.
+     *
+     * The pigeon's position, progress and fate all come from [DeliverySimulator] - the
+     * exact same logic the chat screen uses - so the two screens can never disagree.
      */
     private fun loadMessageAndTrack() {
         viewModelScope.launch {
-            // Retrieve the message from the local messages list via repository
-            // Use the message's actual coordinates and sentAt time
             val message = messageRepository.getMessageById(messageId)
 
             if (message == null) {
@@ -64,6 +64,11 @@ class PigeonMapViewModel @Inject constructor(
                 return@launch
             }
 
+            val distanceKm = calculator.calculateDistance(
+                message.senderLat, message.senderLng,
+                message.receiverLat, message.receiverLng
+            )
+
             _uiState.update {
                 it.copy(
                     isLoading = false,
@@ -71,86 +76,33 @@ class PigeonMapViewModel @Inject constructor(
                     senderLng = message.senderLng,
                     receiverLat = message.receiverLat,
                     receiverLng = message.receiverLng,
-                    pigeonLat = message.pigeonCurrentLat,
-                    pigeonLng = message.pigeonCurrentLng,
-                    status = message.status
+                    distanceKm = distanceKm
                 )
             }
 
-            // If already delivered or lost, show final state
-            if (message.status == MessageStatus.DELIVERED || message.status == MessageStatus.LOST) {
-                val totalDistance = calculator.calculateDistance(
-                    message.senderLat, message.senderLng,
-                    message.receiverLat, message.receiverLng
-                )
-                val totalDeliveryMs = calculator.calculateDeliveryTimeMs(totalDistance)
-                val elapsedMs = System.currentTimeMillis() - message.sentAt
-                val progress = calculator.calculateProgress(elapsedMs, totalDeliveryMs)
-
+            // Emits the current state immediately, then re-reads the clock once a second
+            // and completes as soon as the flight is delivered or lost.
+            deliverySimulator.trackDelivery(message).collect { update ->
                 _uiState.update {
                     it.copy(
-                        progress = if (message.status == MessageStatus.DELIVERED) 1.0 else progress,
-                        estimatedHoursRemaining = 0.0
+                        pigeonLat = update.currentLat,
+                        pigeonLng = update.currentLng,
+                        progress = update.progress,
+                        status = update.status,
+                        estimatedHoursRemaining = if (update.status == MessageStatus.FLYING) {
+                            deliverySimulator.hoursRemaining(message)
+                        } else {
+                            0.0
+                        }
                     )
                 }
-                return@launch
             }
 
-            // For in-flight messages, calculate elapsed time and continue simulation
-            startTrackingFromCurrentState(message)
-        }
-    }
-
-    /**
-     * Continues tracking a message that is still in flight.
-     * Calculates the elapsed time since sentAt and shows the interpolated position.
-     */
-    private fun startTrackingFromCurrentState(message: Message) {
-        val totalDistance = calculator.calculateDistance(
-            message.senderLat, message.senderLng,
-            message.receiverLat, message.receiverLng
-        )
-        val totalDeliveryMs = calculator.calculateDeliveryTimeMs(totalDistance)
-        val elapsedMs = System.currentTimeMillis() - message.sentAt
-
-        // Calculate current position based on elapsed time
-        val progress = calculator.calculateProgress(elapsedMs, totalDeliveryMs)
-        val (currentLat, currentLng) = calculator.calculateCurrentPosition(
-            message.senderLat, message.senderLng,
-            message.receiverLat, message.receiverLng,
-            elapsedMs, totalDeliveryMs
-        )
-
-        val remainingDistance = totalDistance * (1.0 - progress)
-        val hoursRemaining = calculator.calculateDeliveryTimeHours(remainingDistance)
-
-        _uiState.update {
-            it.copy(
-                pigeonLat = currentLat,
-                pigeonLng = currentLng,
-                progress = progress,
-                estimatedHoursRemaining = hoursRemaining
-            )
-        }
-
-        // Continue with live simulation updates from current position
-        viewModelScope.launch {
-            deliverySimulator.simulateDelivery(message).collect { update ->
-                // Only apply updates that are past the current elapsed time
-                if (update.elapsedMs >= elapsedMs) {
-                    val updatedRemainingDistance = totalDistance * (1.0 - update.progress)
-                    val updatedHoursRemaining = calculator.calculateDeliveryTimeHours(updatedRemainingDistance)
-
-                    _uiState.update {
-                        it.copy(
-                            pigeonLat = update.currentLat,
-                            pigeonLng = update.currentLng,
-                            progress = update.progress,
-                            status = update.status,
-                            estimatedHoursRemaining = updatedHoursRemaining
-                        )
-                    }
-                }
+            // The journey finished while we were watching (or before we arrived):
+            // persist the outcome so every client reads the same terminal status.
+            val finalStatus = _uiState.value.status
+            if (finalStatus != MessageStatus.FLYING && message.status != finalStatus) {
+                messageRepository.updateMessageStatus(messageId, finalStatus)
             }
         }
     }

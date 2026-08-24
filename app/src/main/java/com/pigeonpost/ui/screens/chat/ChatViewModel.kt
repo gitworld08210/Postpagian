@@ -81,6 +81,9 @@ class ChatViewModel @Inject constructor(
     /** Recipient profile, loaded once and reused for name + coordinates. */
     private var recipientProfile: User? = null
 
+    /** Messages that already have a real-time ticker running, so we never double-track. */
+    private val trackedMessageIds = mutableSetOf<String>()
+
     init {
         val currentUser = authRepository.getCurrentUser()
         _uiState.update { it.copy(currentUserId = currentUser?.id ?: "") }
@@ -203,6 +206,10 @@ class ChatViewModel @Inject constructor(
             val distance = calculator.calculateDistance(senderLat, senderLng, receiverLat, receiverLng)
             val deliveryTimeMs = calculator.calculateDeliveryTimeMs(distance)
 
+            // The sender decides this pigeon's fate exactly once, here. It is persisted
+            // with the message so every client derives the same outcome forever after.
+            val deathAtProgress = deliverySimulator.assignDeathProgress()
+
             val messageId = UUID.randomUUID().toString()
 
             // Upload attachment if present
@@ -225,7 +232,8 @@ class ChatViewModel @Inject constructor(
                 receiverLng = receiverLng,
                 pigeonCurrentLat = senderLat,
                 pigeonCurrentLng = senderLng,
-                attachmentUrl = attachmentUrl
+                attachmentUrl = attachmentUrl,
+                deathAtProgress = deathAtProgress
             )
 
             _uiState.update {
@@ -241,22 +249,56 @@ class ChatViewModel @Inject constructor(
             soundManager.playPigeonCoo()
 
             messageRepository.sendMessage(message)
-            simulateDelivery(message)
+            trackDelivery(message)
         }
     }
 
-    private fun simulateDelivery(message: Message) {
+    /**
+     * Re-derives every message's flight state from the real clock and starts a
+     * real-time ticker for the ones still in the air. Messages that already reached a
+     * terminal state while the app was closed are applied silently - their sounds and
+     * notifications already happened, and their fate must not be re-rolled.
+     */
+    private fun refreshFlightStates(messages: List<Message>): List<Message> {
+        val now = System.currentTimeMillis()
+        return messages.map { message ->
+            val update = deliverySimulator.snapshot(message, now)
+            val settled = message.copy(
+                status = update.status,
+                pigeonCurrentLat = update.currentLat,
+                pigeonCurrentLng = update.currentLng
+            )
+            if (update.status == MessageStatus.FLYING) {
+                trackDelivery(settled)
+            } else if (message.status == MessageStatus.FLYING) {
+                // The journey finished while nobody was watching - persist the outcome.
+                trackedMessageIds.add(message.id)
+                viewModelScope.launch {
+                    messageRepository.updateMessageStatus(message.id, update.status)
+                }
+            }
+            settled
+        }
+    }
+
+    /**
+     * Starts a wall-clock ticker for a single in-flight message. Idempotent.
+     */
+    private fun trackDelivery(message: Message) {
+        if (!trackedMessageIds.add(message.id)) return
         viewModelScope.launch {
-            deliverySimulator.simulateDelivery(message).collect { update ->
+            deliverySimulator.trackDelivery(message).collect { update ->
                 handleDeliveryUpdate(update)
             }
         }
     }
 
     private fun handleDeliveryUpdate(update: DeliveryUpdate) {
+        var previousStatus: MessageStatus? = null
         _uiState.update { state ->
             val updatedMessages = state.messages.map { msg ->
                 if (msg.id == update.messageId) {
+                    previousStatus = msg.status
                     msg.copy(
                         status = update.status,
                         pigeonCurrentLat = update.currentLat,
@@ -266,6 +308,10 @@ class ChatViewModel @Inject constructor(
             }
             state.copy(messages = updatedMessages)
         }
+
+        // Only fire sounds/notifications/animations on a real transition out of FLYING,
+        // never when simply re-reading an already finished flight.
+        if (previousStatus != null && previousStatus != MessageStatus.FLYING) return
 
         when (update.status) {
             MessageStatus.DELIVERED -> {
@@ -312,7 +358,10 @@ class ChatViewModel @Inject constructor(
             val userId = _uiState.value.currentUserId
             messageRepository.getMessages(userId, otherUserId).fold(
                 onSuccess = { messages ->
-                    _uiState.update { it.copy(messages = messages, isLoading = false) }
+                    // Derive each pigeon's real current state from the wall clock, so
+                    // reopening the chat hours later shows the truth.
+                    val settled = refreshFlightStates(messages)
+                    _uiState.update { it.copy(messages = settled, isLoading = false) }
                 },
                 onFailure = { e ->
                     _uiState.update { it.copy(error = e.message, isLoading = false) }
@@ -327,7 +376,16 @@ class ChatViewModel @Inject constructor(
             try {
                 messageRepository.observeMessages(userId).collect { message ->
                     if (message.senderId == otherUserId) {
-                        _uiState.update { it.copy(messages = it.messages + message) }
+                        val update = deliverySimulator.snapshot(message)
+                        val settled = message.copy(
+                            status = update.status,
+                            pigeonCurrentLat = update.currentLat,
+                            pigeonCurrentLng = update.currentLng
+                        )
+                        _uiState.update { it.copy(messages = it.messages + settled) }
+                        if (update.status == MessageStatus.FLYING) {
+                            trackDelivery(settled)
+                        }
                     }
                 }
             } catch (e: Exception) {

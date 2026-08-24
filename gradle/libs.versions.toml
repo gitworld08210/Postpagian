@@ -17,6 +17,7 @@ kotlinxSerialization = "1.6.2"
 kotlinxCoroutines = "1.7.3"
 playServicesLocation = "21.1.0"
 playServicesMaps = "18.2.0"
+osmdroid = "6.1.18"
 junit = "4.13.2"
 junitExt = "1.1.5"
 espresso = "3.5.1"
@@ -67,6 +68,9 @@ kotlinx-coroutines-core = { group = "org.jetbrains.kotlinx", name = "kotlinx-cor
 # Google Play Services
 play-services-location = { group = "com.google.android.gms", name = "play-services-location", version.ref = "playServicesLocation" }
 play-services-maps = { group = "com.google.android.gms", name = "play-services-maps", version.ref = "playServicesMaps" }
+
+# OpenStreetMap (osmdroid) - no API key required
+osmdroid-android = { group = "org.osmdroid", name = "osmdroid-android", version.ref = "osmdroid" }
 
 # Testing
 junit = { group = "junit", name = "junit", version.ref = "junit" }

@@ -1,6 +1,9 @@
 package com.pigeonpost.ui.screens.map
 
+import android.graphics.DashPathEffect
 import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Spacer
@@ -8,10 +11,12 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -21,17 +26,23 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.PathEffect
-import androidx.compose.ui.graphics.drawscope.DrawScope
+import androidx.compose.ui.graphics.toArgb
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalLifecycleOwner
 import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.viewinterop.AndroidView
 import androidx.hilt.navigation.compose.hiltViewModel
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.pigeonpost.data.model.MessageStatus
 import com.pigeonpost.ui.components.ParchmentBackground
@@ -44,13 +55,34 @@ import com.pigeonpost.ui.theme.Parchment300
 import com.pigeonpost.ui.theme.RoyalBlue800
 import com.pigeonpost.ui.theme.WaxSealRed400
 import com.pigeonpost.ui.theme.WaxSealRed500
-import kotlin.math.cos
-import kotlin.math.sin
+import org.osmdroid.tileprovider.tilesource.TileSourceFactory
+import org.osmdroid.util.BoundingBox
+import org.osmdroid.util.GeoPoint
+import org.osmdroid.views.CustomZoomButtonsController
+import org.osmdroid.views.MapView
+import org.osmdroid.views.overlay.Marker
+import org.osmdroid.views.overlay.Polyline
+import java.util.concurrent.atomic.AtomicBoolean
+import kotlin.math.abs
+import kotlin.math.max
+import kotlin.math.min
+
+/** Number of sampled points used to draw a route leg. */
+private const val ROUTE_SAMPLES = 64
+
+/** Smallest span, in degrees, the camera will frame - keeps short hops from over-zooming. */
+private const val MIN_BOUNDS_SPAN_DEG = 0.02
+
+/** Padding, in pixels, left around the route when framing the camera. */
+private const val BOUNDS_PADDING_PX = 64
 
 /**
- * Shows pigeon's current position on a stylized old-world map background.
- * Features animated pigeon icon moving along the path, dotted trail line,
- * and origin/destination markers as medieval map pins.
+ * Shows the pigeon's real position on a real OpenStreetMap chart.
+ *
+ * Everything plotted here comes from the actual latitude/longitude in
+ * [PigeonMapUiState] - the sender's position, the recipient's position, the route, and
+ * the bird's live interpolated position at 60 km/h. The map is framed in a decorative
+ * border and topped with a compass rose so it still reads as a chart in an old atlas.
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -92,17 +124,51 @@ fun PigeonMapScreen(
                     .padding(padding)
                     .padding(16.dp)
             ) {
-                // Old-world map canvas
-                Box(
+                // Real map, framed like an old chart
+                AncientChartFrame(
                     modifier = Modifier
                         .fillMaxWidth()
                         .weight(1f)
                 ) {
-                    OldWorldMap(
-                        pigeonProgress = uiState.progress.toFloat(),
-                        status = uiState.status,
-                        modifier = Modifier.fillMaxSize()
-                    )
+                    when {
+                        uiState.error != null -> {
+                            Box(
+                                modifier = Modifier.fillMaxSize(),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Text(
+                                    text = uiState.error ?: "",
+                                    style = MaterialTheme.typography.bodyLarge,
+                                    color = WaxSealRed500,
+                                    fontStyle = FontStyle.Italic,
+                                    textAlign = TextAlign.Center,
+                                    modifier = Modifier.padding(24.dp)
+                                )
+                            }
+                        }
+
+                        uiState.isLoading -> {
+                            Box(
+                                modifier = Modifier.fillMaxSize(),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                CircularProgressIndicator(color = GoldAccent500)
+                            }
+                        }
+
+                        else -> {
+                            RealPigeonMap(
+                                uiState = uiState,
+                                modifier = Modifier.fillMaxSize()
+                            )
+                            CompassRose(
+                                modifier = Modifier
+                                    .align(Alignment.TopEnd)
+                                    .padding(10.dp)
+                                    .size(44.dp)
+                            )
+                        }
+                    }
                 }
 
                 Spacer(modifier = Modifier.height(16.dp))
@@ -148,6 +214,11 @@ fun PigeonMapScreen(
                                 style = MaterialTheme.typography.bodyMedium,
                                 color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f)
                             )
+                            Text(
+                                text = "${String.format("%.0f", uiState.distanceKm)} km journey at 60 km/h",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f)
+                            )
                         }
                     }
                 }
@@ -157,216 +228,273 @@ fun PigeonMapScreen(
 }
 
 /**
- * Custom Canvas-based map composable that draws a stylized old-world map appearance
- * with the pigeon path, since we don't have a Google Maps API key.
+ * Decorative double border around the map so the modern tiles still sit inside
+ * something that feels like a page torn from an atlas.
  */
 @Composable
-private fun OldWorldMap(
-    pigeonProgress: Float,
-    status: MessageStatus,
+private fun AncientChartFrame(
+    modifier: Modifier = Modifier,
+    content: @Composable androidx.compose.foundation.layout.BoxScope.() -> Unit
+) {
+    Box(
+        modifier = modifier
+            .background(Parchment300)
+            .border(width = 3.dp, color = DeepBrown800.copy(alpha = 0.65f))
+            .padding(5.dp)
+    ) {
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .border(width = 1.dp, color = GoldAccent500.copy(alpha = 0.7f))
+                .padding(2.dp),
+            content = content
+        )
+    }
+}
+
+/**
+ * A real OpenStreetMap view (osmdroid - no API key required) plotting the actual
+ * journey. The MapView is created once, kept across recompositions, driven through
+ * [AndroidView]'s update block, and tied to the host lifecycle so it is resumed,
+ * paused and detached properly rather than leaking.
+ */
+@Composable
+private fun RealPigeonMap(
+    uiState: PigeonMapUiState,
     modifier: Modifier = Modifier
 ) {
-    Canvas(modifier = modifier) {
-        drawOldWorldBackground()
-        drawMapRoute(pigeonProgress)
-        drawOriginMarker()
-        drawDestinationMarker()
-        if (status != MessageStatus.LOST) {
-            drawPigeonOnMap(pigeonProgress)
-        } else {
-            drawDeathMarker(pigeonProgress)
+    val context = LocalContext.current
+    val lifecycleOwner = LocalLifecycleOwner.current
+
+    val mapView = remember {
+        MapView(context).apply {
+            setTileSource(TileSourceFactory.MAPNIK)
+            setMultiTouchControls(true)
+            isTilesScaledToDpi = true
+            setUseDataConnection(true)
+            minZoomLevel = 2.0
+            zoomController.setVisibility(CustomZoomButtonsController.Visibility.NEVER)
         }
     }
-}
 
-private fun DrawScope.drawOldWorldBackground() {
-    // Parchment base
-    drawRect(color = Parchment300)
-
-    // Map grid lines (stylized latitude/longitude)
-    val gridColor = DeepBrown700.copy(alpha = 0.1f)
-    val gridSpacing = size.width / 8
-
-    repeat(9) { i ->
-        val x = i * gridSpacing
-        drawLine(
-            color = gridColor,
-            start = Offset(x, 0f),
-            end = Offset(x, size.height),
-            strokeWidth = 0.5f
-        )
-    }
-    repeat(7) { i ->
-        val y = i * (size.height / 6)
-        drawLine(
-            color = gridColor,
-            start = Offset(0f, y),
-            end = Offset(size.width, y),
-            strokeWidth = 0.5f
-        )
+    // Full route: dashed sepia ink.
+    val routeLine = remember {
+        Polyline(mapView).apply {
+            outlinePaint.color = DeepBrown700.copy(alpha = 0.75f).toArgb()
+            outlinePaint.strokeWidth = 7f
+            outlinePaint.strokeCap = android.graphics.Paint.Cap.ROUND
+            outlinePaint.pathEffect = DashPathEffect(floatArrayOf(22f, 14f), 0f)
+            setInfoWindow(null)
+        }
     }
 
-    // Compass rose in corner
-    val compassCenter = Offset(size.width * 0.85f, size.height * 0.15f)
-    val compassRadius = size.minDimension * 0.06f
-    drawCircle(color = GoldAccent400.copy(alpha = 0.3f), radius = compassRadius, center = compassCenter)
-    // N pointer
-    drawLine(
-        color = WaxSealRed400,
-        start = compassCenter,
-        end = Offset(compassCenter.x, compassCenter.y - compassRadius),
-        strokeWidth = 2f
-    )
-    // S pointer
-    drawLine(
-        color = DeepBrown800,
-        start = compassCenter,
-        end = Offset(compassCenter.x, compassCenter.y + compassRadius),
-        strokeWidth = 1.5f
-    )
-    // E and W pointers
-    drawLine(
-        color = DeepBrown800,
-        start = Offset(compassCenter.x - compassRadius, compassCenter.y),
-        end = Offset(compassCenter.x + compassRadius, compassCenter.y),
-        strokeWidth = 1.5f
-    )
+    // Distance already flown: solid gold.
+    val flownLine = remember {
+        Polyline(mapView).apply {
+            outlinePaint.color = GoldAccent500.toArgb()
+            outlinePaint.strokeWidth = 11f
+            outlinePaint.strokeCap = android.graphics.Paint.Cap.ROUND
+            setInfoWindow(null)
+        }
+    }
 
-    // Stylized land masses (simplified continent shapes)
-    val landColor = DeepBrown700.copy(alpha = 0.15f)
-    drawCircle(color = landColor, radius = size.width * 0.15f, center = Offset(size.width * 0.2f, size.height * 0.4f))
-    drawCircle(color = landColor, radius = size.width * 0.12f, center = Offset(size.width * 0.8f, size.height * 0.5f))
+    val originMarker = remember {
+        Marker(mapView).apply {
+            icon = MapMarkerIcons.locationPin(
+                context = context,
+                fillColor = RoyalBlue800.toArgb(),
+                ringColor = DeepBrown800.toArgb()
+            )
+            title = "Dispatched from here"
+            setAnchor(Marker.ANCHOR_CENTER, Marker.ANCHOR_BOTTOM)
+        }
+    }
 
-    // Decorative border
-    val borderColor = DeepBrown800.copy(alpha = 0.4f)
-    drawRect(
-        color = borderColor,
-        style = androidx.compose.ui.graphics.drawscope.Stroke(width = 3f)
-    )
-    drawRect(
-        color = borderColor.copy(alpha = 0.2f),
-        topLeft = Offset(6f, 6f),
-        size = androidx.compose.ui.geometry.Size(size.width - 12f, size.height - 12f),
-        style = androidx.compose.ui.graphics.drawscope.Stroke(width = 1f)
-    )
-}
+    val destinationMarker = remember {
+        Marker(mapView).apply {
+            icon = MapMarkerIcons.locationPin(
+                context = context,
+                fillColor = WaxSealRed500.toArgb(),
+                ringColor = DeepBrown800.toArgb()
+            )
+            title = "Destination"
+            setAnchor(Marker.ANCHOR_CENTER, Marker.ANCHOR_BOTTOM)
+        }
+    }
 
-private fun DrawScope.drawMapRoute(progress: Float) {
-    val startX = size.width * 0.15f
-    val startY = size.height * 0.55f
-    val endX = size.width * 0.85f
-    val endY = size.height * 0.45f
+    val pigeonMarker = remember {
+        Marker(mapView).apply {
+            icon = MapMarkerIcons.pigeon(
+                context = context,
+                bodyColor = DeepBrown800.toArgb(),
+                glowColor = GoldAccent400.toArgb()
+            )
+            title = "Thy pigeon"
+            setAnchor(Marker.ANCHOR_CENTER, Marker.ANCHOR_CENTER)
+        }
+    }
 
-    // Full route (dotted line)
-    drawLine(
-        color = DeepBrown700.copy(alpha = 0.4f),
-        start = Offset(startX, startY),
-        end = Offset(endX, endY),
-        strokeWidth = 2f,
-        pathEffect = PathEffect.dashPathEffect(floatArrayOf(10f, 8f), 0f)
-    )
+    val deathMarker = remember {
+        Marker(mapView).apply {
+            icon = MapMarkerIcons.deathCross(
+                context = context,
+                color = WaxSealRed500.toArgb()
+            )
+            title = "Here the pigeon perished"
+            setAnchor(Marker.ANCHOR_CENTER, Marker.ANCHOR_CENTER)
+        }
+    }
 
-    // Traveled route (solid gold line)
-    val currentX = startX + (endX - startX) * progress
-    val currentY = startY + (endY - startY) * progress
-    drawLine(
-        color = GoldAccent500,
-        start = Offset(startX, startY),
-        end = Offset(currentX, currentY),
-        strokeWidth = 3f
-    )
-}
+    // The camera is fitted to the route once, then the user is left in control.
+    // Deliberately not snapshot state: it is written from the update block below.
+    val hasFramedRoute = remember { AtomicBoolean(false) }
 
-private fun DrawScope.drawOriginMarker() {
-    val x = size.width * 0.15f
-    val y = size.height * 0.55f
+    DisposableEffect(lifecycleOwner) {
+        if (lifecycleOwner.lifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED)) {
+            mapView.onResume()
+        }
+        val observer = LifecycleEventObserver { _, event ->
+            when (event) {
+                Lifecycle.Event.ON_RESUME -> mapView.onResume()
+                Lifecycle.Event.ON_PAUSE -> mapView.onPause()
+                else -> Unit
+            }
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose {
+            lifecycleOwner.lifecycle.removeObserver(observer)
+            mapView.onPause()
+            mapView.onDetach()
+        }
+    }
 
-    // Pin base
-    drawCircle(color = RoyalBlue800, radius = 10f, center = Offset(x, y))
-    drawCircle(color = Parchment100, radius = 4f, center = Offset(x, y))
+    AndroidView(
+        factory = { mapView },
+        modifier = modifier,
+        update = { map ->
+            val origin = GeoPoint(uiState.senderLat, uiState.senderLng)
+            val destination = GeoPoint(uiState.receiverLat, uiState.receiverLng)
+            val pigeon = GeoPoint(uiState.pigeonLat, uiState.pigeonLng)
 
-    // Pin pole
-    drawLine(
-        color = RoyalBlue800,
-        start = Offset(x, y),
-        end = Offset(x, y + 15f),
-        strokeWidth = 2f
-    )
-}
+            routeLine.setPoints(samplePath(origin, destination))
+            flownLine.setPoints(samplePath(origin, pigeon))
+            originMarker.position = origin
+            destinationMarker.position = destination
+            pigeonMarker.position = pigeon
+            deathMarker.position = pigeon
 
-private fun DrawScope.drawDestinationMarker() {
-    val x = size.width * 0.85f
-    val y = size.height * 0.45f
+            if (map.overlays.isEmpty()) {
+                map.overlays.add(routeLine)
+                map.overlays.add(flownLine)
+                map.overlays.add(originMarker)
+                map.overlays.add(destinationMarker)
+            }
 
-    // Pin base
-    drawCircle(color = WaxSealRed500, radius = 10f, center = Offset(x, y))
-    drawCircle(color = Parchment100, radius = 4f, center = Offset(x, y))
+            // A perished pigeon is replaced by a cross at the spot where it fell.
+            val bird = if (uiState.status == MessageStatus.LOST) deathMarker else pigeonMarker
+            val stale = if (uiState.status == MessageStatus.LOST) pigeonMarker else deathMarker
+            map.overlays.remove(stale)
+            if (!map.overlays.contains(bird)) {
+                map.overlays.add(bird)
+            }
 
-    // Pin pole
-    drawLine(
-        color = WaxSealRed500,
-        start = Offset(x, y),
-        end = Offset(x, y + 15f),
-        strokeWidth = 2f
-    )
-}
+            if (hasRealCoordinates(uiState) && hasFramedRoute.compareAndSet(false, true)) {
+                val bounds = routeBounds(origin, destination)
+                map.post {
+                    map.zoomToBoundingBox(bounds, false, BOUNDS_PADDING_PX)
+                }
+            }
 
-private fun DrawScope.drawPigeonOnMap(progress: Float) {
-    val startX = size.width * 0.15f
-    val startY = size.height * 0.55f
-    val endX = size.width * 0.85f
-    val endY = size.height * 0.45f
-
-    val x = startX + (endX - startX) * progress
-    val y = startY + (endY - startY) * progress
-
-    // Pigeon icon (simplified bird shape)
-    drawCircle(color = DeepBrown800, radius = 8f, center = Offset(x, y))
-
-    // Wings
-    val wingSpread = 12f
-    drawLine(
-        color = DeepBrown800,
-        start = Offset(x - wingSpread, y - 4f),
-        end = Offset(x, y),
-        strokeWidth = 2f
-    )
-    drawLine(
-        color = DeepBrown800,
-        start = Offset(x + wingSpread, y - 4f),
-        end = Offset(x, y),
-        strokeWidth = 2f
-    )
-
-    // Glow effect
-    drawCircle(
-        color = GoldAccent400.copy(alpha = 0.3f),
-        radius = 16f,
-        center = Offset(x, y)
+            map.invalidate()
+        }
     )
 }
 
-private fun DrawScope.drawDeathMarker(progress: Float) {
-    val startX = size.width * 0.15f
-    val startY = size.height * 0.55f
-    val endX = size.width * 0.85f
-    val endY = size.height * 0.45f
+/**
+ * Samples the leg into many small segments. The pigeon's position is interpolated
+ * between the two endpoints, so sampling the same interpolation guarantees the bird
+ * always sits exactly on the drawn line, and the many segments let the line follow the
+ * map's curved Mercator projection instead of being drawn as one straight screen chord.
+ */
+private fun samplePath(start: GeoPoint, end: GeoPoint): List<GeoPoint> {
+    return (0..ROUTE_SAMPLES).map { step ->
+        val fraction = step.toDouble() / ROUTE_SAMPLES
+        GeoPoint(
+            start.latitude + (end.latitude - start.latitude) * fraction,
+            start.longitude + (end.longitude - start.longitude) * fraction
+        )
+    }
+}
 
-    val x = startX + (endX - startX) * progress
-    val y = startY + (endY - startY) * progress
+/**
+ * Bounding box covering the whole journey, widened so a very short hop does not zoom
+ * all the way in on a single street.
+ */
+private fun routeBounds(origin: GeoPoint, destination: GeoPoint): BoundingBox {
+    var north = max(origin.latitude, destination.latitude)
+    var south = min(origin.latitude, destination.latitude)
+    var east = max(origin.longitude, destination.longitude)
+    var west = min(origin.longitude, destination.longitude)
 
-    // X mark for death location
-    val crossSize = 10f
-    drawLine(
-        color = WaxSealRed500,
-        start = Offset(x - crossSize, y - crossSize),
-        end = Offset(x + crossSize, y + crossSize),
-        strokeWidth = 3f
-    )
-    drawLine(
-        color = WaxSealRed500,
-        start = Offset(x + crossSize, y - crossSize),
-        end = Offset(x - crossSize, y + crossSize),
-        strokeWidth = 3f
-    )
+    if (north - south < MIN_BOUNDS_SPAN_DEG) {
+        val pad = (MIN_BOUNDS_SPAN_DEG - (north - south)) / 2
+        north = (north + pad).coerceAtMost(85.0)
+        south = (south - pad).coerceAtLeast(-85.0)
+    }
+    if (east - west < MIN_BOUNDS_SPAN_DEG) {
+        val pad = (MIN_BOUNDS_SPAN_DEG - (east - west)) / 2
+        east = (east + pad).coerceAtMost(180.0)
+        west = (west - pad).coerceAtLeast(-180.0)
+    }
+
+    return BoundingBox(north, east, south, west)
+}
+
+/** Guards against framing the camera on placeholder (0,0) coordinates. */
+private fun hasRealCoordinates(uiState: PigeonMapUiState): Boolean {
+    val epsilon = 0.000001
+    val senderSet = abs(uiState.senderLat) > epsilon || abs(uiState.senderLng) > epsilon
+    val receiverSet = abs(uiState.receiverLat) > epsilon || abs(uiState.receiverLng) > epsilon
+    return senderSet || receiverSet
+}
+
+/**
+ * Small hand-drawn compass rose laid over the corner of the chart.
+ */
+@Composable
+private fun CompassRose(modifier: Modifier = Modifier) {
+    Canvas(modifier = modifier) {
+        val center = Offset(size.width / 2f, size.height / 2f)
+        val radius = size.minDimension / 2f
+
+        drawCircle(color = Parchment100.copy(alpha = 0.85f), radius = radius, center = center)
+        drawCircle(
+            color = DeepBrown800.copy(alpha = 0.6f),
+            radius = radius,
+            center = center,
+            style = androidx.compose.ui.graphics.drawscope.Stroke(width = 1.5f)
+        )
+        // North
+        drawLine(
+            color = WaxSealRed400,
+            start = center,
+            end = Offset(center.x, center.y - radius * 0.8f),
+            strokeWidth = 3f
+        )
+        // South
+        drawLine(
+            color = DeepBrown800,
+            start = center,
+            end = Offset(center.x, center.y + radius * 0.8f),
+            strokeWidth = 2f
+        )
+        // East / West
+        drawLine(
+            color = DeepBrown800,
+            start = Offset(center.x - radius * 0.8f, center.y),
+            end = Offset(center.x + radius * 0.8f, center.y),
+            strokeWidth = 2f
+        )
+        drawCircle(color = GoldAccent500, radius = radius * 0.12f, center = center)
+    }
 }

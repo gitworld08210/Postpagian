@@ -10,7 +10,7 @@ import javax.inject.Singleton
 import kotlin.random.Random
 
 /**
- * Represents an update from the delivery simulator about a pigeon's flight status.
+ * Represents an update about a pigeon's flight status at a given moment in time.
  */
 data class DeliveryUpdate(
     val messageId: String,
@@ -22,8 +22,20 @@ data class DeliveryUpdate(
 )
 
 /**
- * Coroutine-based delivery simulator that tracks pigeon position over time.
- * Emits position updates via Flow, simulates pigeon death at random intervals.
+ * Derives a pigeon's flight state from the real wall clock.
+ *
+ * There is no time compression: a pigeon flies at [PigeonDeliveryCalculator.PIGEON_SPEED_KMH]
+ * (60 km/h), so a journey genuinely takes `distance / 60` hours of real time.
+ *
+ * The state of a message is a *pure function* of:
+ *  - `sentAt`            (when the pigeon left)
+ *  - `deliveryTime`      (how long the whole journey takes, in millis)
+ *  - `deathAtProgress`   (the fraction of the route where this pigeon perishes, or null)
+ *  - the current clock
+ *
+ * Because nothing is random at read time, the app can be closed and reopened hours
+ * later and still show the correct position, and the sender and the recipient always
+ * agree on the same fate and the same position.
  */
 @Singleton
 class DeliverySimulator @Inject constructor(
@@ -31,110 +43,144 @@ class DeliverySimulator @Inject constructor(
 ) {
 
     companion object {
-        /** Update interval in milliseconds (every 5 seconds for simulation) */
-        const val UPDATE_INTERVAL_MS = 5000L
+        /** How often the clock is re-read while a pigeon is in flight (1 second). */
+        const val TICK_INTERVAL_MS = 1000L
 
-        /** Simulated time step per update (30 minutes of flight per update tick) */
-        const val SIMULATED_TIME_STEP_MS = 30 * 60 * 1000L
+        /** Earliest point of the route at which a doomed pigeon may perish. */
+        const val MIN_DEATH_PROGRESS = 0.05
+
+        /** Latest point of the route at which a doomed pigeon may perish. */
+        const val MAX_DEATH_PROGRESS = 0.95
+
+        private const val MS_PER_HOUR = 3_600_000.0
     }
 
     /**
-     * Simulates a pigeon delivery, emitting position updates as a Flow.
-     * The pigeon may die at any point during the journey (7% total chance spread across updates).
+     * Decides a pigeon's fate. Called **once**, by the sender, when the message is created.
      *
-     * @param message The message being delivered
-     * @param random Random instance for death check (injectable for testing)
-     * @return Flow of DeliveryUpdate
+     * @return the fraction of the route at which the pigeon perishes
+     *         ([MIN_DEATH_PROGRESS]..[MAX_DEATH_PROGRESS]), or `null` if it survives.
+     *         Doomed with [PigeonDeliveryCalculator.DEATH_PROBABILITY] (7%) probability.
      */
-    fun simulateDelivery(
-        message: Message,
-        random: Random = Random
-    ): Flow<DeliveryUpdate> = flow {
+    fun assignDeathProgress(random: Random = Random): Double? {
+        if (!calculator.doesPigeonDie(random)) return null
+        val span = MAX_DEATH_PROGRESS - MIN_DEATH_PROGRESS
+        return (MIN_DEATH_PROGRESS + random.nextDouble() * span)
+            .coerceIn(MIN_DEATH_PROGRESS, MAX_DEATH_PROGRESS)
+    }
+
+    /**
+     * Total duration of the journey in milliseconds. Prefers the value persisted with
+     * the message and falls back to recomputing it from the route at 60 km/h.
+     */
+    fun totalDeliveryMs(message: Message): Long {
+        if (message.deliveryTime > 0) return message.deliveryTime
         val distanceKm = calculator.calculateDistance(
             message.senderLat, message.senderLng,
             message.receiverLat, message.receiverLng
         )
-        val totalDeliveryMs = calculator.calculateDeliveryTimeMs(distanceKm)
+        return calculator.calculateDeliveryTimeMs(distanceKm)
+    }
 
-        if (totalDeliveryMs <= 0) {
-            // Instant delivery for same location
-            emit(
-                DeliveryUpdate(
-                    messageId = message.id,
-                    currentLat = message.receiverLat,
-                    currentLng = message.receiverLng,
-                    progress = 1.0,
-                    status = MessageStatus.DELIVERED,
-                    elapsedMs = 0
-                )
-            )
-            return@flow
+    /**
+     * The single source of truth for a pigeon's state. Both the chat screen and the
+     * tracker screen go through here, so they can never disagree.
+     *
+     * @param now current epoch millis (injectable for testing)
+     */
+    fun snapshot(message: Message, now: Long = System.currentTimeMillis()): DeliveryUpdate {
+        val totalMs = totalDeliveryMs(message)
+        val elapsedMs = (now - message.sentAt).coerceAtLeast(0L)
+
+        // rawProgress = (now - sent_at) / delivery_time
+        val rawProgress = if (totalMs <= 0L) {
+            1.0
+        } else {
+            (elapsedMs.toDouble() / totalMs).coerceIn(0.0, 1.0)
         }
 
-        // Calculate how many update steps the journey will take
-        val totalSteps = (totalDeliveryMs / SIMULATED_TIME_STEP_MS).toInt().coerceAtLeast(1)
-        // Spread death probability across all steps
-        val deathProbabilityPerStep = 1.0 - Math.pow(1.0 - PigeonDeliveryCalculator.DEATH_PROBABILITY, 1.0 / totalSteps)
+        val deathAt = message.deathAtProgress
 
-        var elapsedMs = 0L
-
-        while (elapsedMs < totalDeliveryMs) {
-            elapsedMs += SIMULATED_TIME_STEP_MS
-
-            // Check for pigeon death at this step
-            if (random.nextDouble() < deathProbabilityPerStep) {
-                val (deathLat, deathLng) = calculator.calculateCurrentPosition(
-                    message.senderLat, message.senderLng,
-                    message.receiverLat, message.receiverLng,
-                    elapsedMs, totalDeliveryMs
-                )
-                emit(
-                    DeliveryUpdate(
-                        messageId = message.id,
-                        currentLat = deathLat,
-                        currentLng = deathLng,
-                        progress = calculator.calculateProgress(elapsedMs, totalDeliveryMs),
-                        status = MessageStatus.LOST,
-                        elapsedMs = elapsedMs
-                    )
-                )
-                return@flow
-            }
-
-            // Emit position update
-            val (currentLat, currentLng) = calculator.calculateCurrentPosition(
-                message.senderLat, message.senderLng,
-                message.receiverLat, message.receiverLng,
-                elapsedMs, totalDeliveryMs
+        // A doomed pigeon freezes forever at its death point.
+        if (deathAt != null && rawProgress >= deathAt) {
+            val frozen = deathAt.coerceIn(0.0, 1.0)
+            val (lat, lng) = positionAt(message, frozen)
+            return DeliveryUpdate(
+                messageId = message.id,
+                currentLat = lat,
+                currentLng = lng,
+                progress = frozen,
+                status = MessageStatus.LOST,
+                elapsedMs = (frozen * totalMs).toLong()
             )
-            val progress = calculator.calculateProgress(elapsedMs, totalDeliveryMs)
-
-            emit(
-                DeliveryUpdate(
-                    messageId = message.id,
-                    currentLat = currentLat,
-                    currentLng = currentLng,
-                    progress = progress,
-                    status = if (progress >= 1.0) MessageStatus.DELIVERED else MessageStatus.FLYING,
-                    elapsedMs = elapsedMs
-                )
-            )
-
-            if (progress >= 1.0) return@flow
-
-            delay(UPDATE_INTERVAL_MS)
         }
 
-        // Final delivery
-        emit(
-            DeliveryUpdate(
+        if (rawProgress >= 1.0) {
+            return DeliveryUpdate(
                 messageId = message.id,
                 currentLat = message.receiverLat,
                 currentLng = message.receiverLng,
                 progress = 1.0,
                 status = MessageStatus.DELIVERED,
-                elapsedMs = totalDeliveryMs
+                elapsedMs = totalMs
             )
+        }
+
+        val (lat, lng) = positionAt(message, rawProgress)
+        return DeliveryUpdate(
+            messageId = message.id,
+            currentLat = lat,
+            currentLng = lng,
+            progress = rawProgress,
+            status = MessageStatus.FLYING,
+            elapsedMs = elapsedMs
+        )
+    }
+
+    /**
+     * Real hours of flight still remaining, based on the wall clock. Zero once the
+     * flight has reached a terminal state.
+     */
+    fun hoursRemaining(message: Message, now: Long = System.currentTimeMillis()): Double {
+        val update = snapshot(message, now)
+        if (update.status != MessageStatus.FLYING) return 0.0
+        val totalMs = totalDeliveryMs(message)
+        val remainingMs = (totalMs - update.elapsedMs).coerceAtLeast(0L)
+        return remainingMs / MS_PER_HOUR
+    }
+
+    /** True once the flight can no longer change. */
+    fun isTerminal(status: MessageStatus): Boolean = status != MessageStatus.FLYING
+
+    /**
+     * Tracks a delivery in real time. Emits the current state immediately, then
+     * re-reads the clock every [TICK_INTERVAL_MS] and recomputes. Completes as soon
+     * as the flight reaches a terminal state (DELIVERED or LOST), so no ticker is
+     * left running for a finished journey.
+     *
+     * @param clock supplies the current epoch millis (injectable for testing)
+     */
+    fun trackDelivery(
+        message: Message,
+        clock: () -> Long = { System.currentTimeMillis() }
+    ): Flow<DeliveryUpdate> = flow {
+        while (true) {
+            val update = snapshot(message, clock())
+            emit(update)
+            if (isTerminal(update.status)) return@flow
+            delay(TICK_INTERVAL_MS)
+        }
+    }
+
+    private fun positionAt(message: Message, progress: Double): Pair<Double, Double> {
+        return calculator.calculateCurrentPosition(
+            message.senderLat, message.senderLng,
+            message.receiverLat, message.receiverLng,
+            elapsedMs = (progress * PROGRESS_SCALE).toLong(),
+            totalDeliveryMs = PROGRESS_SCALE
         )
     }
 }
+
+/** Fixed denominator used to express a progress fraction as an elapsed/total pair. */
+private const val PROGRESS_SCALE = 1_000_000L
