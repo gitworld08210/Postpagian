@@ -25,6 +25,11 @@ android {
         // Supabase configuration from gradle.properties (override in local.properties)
         buildConfigField("String", "SUPABASE_URL", "\"${project.findProperty("SUPABASE_URL") ?: "https://your-project.supabase.co"}\"")
         buildConfigField("String", "SUPABASE_KEY", "\"${project.findProperty("SUPABASE_KEY") ?: "your-anon-key"}\"")
+
+        // Google Maps key from gradle.properties (override in local.properties).
+        // Injected into the manifest so the raw key never lives in version-controlled XML.
+        manifestPlaceholders["MAPS_API_KEY"] =
+            (project.findProperty("MAPS_API_KEY") ?: "your-maps-api-key").toString()
     }
 
     buildTypes {
@@ -107,8 +112,8 @@ dependencies {
     implementation(libs.play.services.location)
     implementation(libs.play.services.maps)
 
-    // OpenStreetMap map tiles (osmdroid) - needs no API key
-    implementation(libs.osmdroid.android)
+    // Google Maps for Compose
+    implementation(libs.maps.compose)
 
     // Testing
     testImplementation(libs.junit)

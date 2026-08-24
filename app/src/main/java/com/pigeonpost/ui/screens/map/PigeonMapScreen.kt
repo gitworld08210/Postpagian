@@ -1,6 +1,5 @@
 package com.pigeonpost.ui.screens.map
 
-import android.graphics.DashPathEffect
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -26,24 +25,39 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.platform.LocalLifecycleOwner
 import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.viewinterop.AndroidView
 import androidx.hilt.navigation.compose.hiltViewModel
-import androidx.lifecycle.Lifecycle
-import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.google.android.gms.maps.CameraUpdateFactory
+import com.google.android.gms.maps.model.CameraPosition
+import com.google.android.gms.maps.model.Dash
+import com.google.android.gms.maps.model.Gap
+import com.google.android.gms.maps.model.LatLng
+import com.google.android.gms.maps.model.LatLngBounds
+import com.google.android.gms.maps.model.MapStyleOptions
+import com.google.android.gms.maps.model.RoundCap
+import com.google.maps.android.compose.GoogleMap
+import com.google.maps.android.compose.MapProperties
+import com.google.maps.android.compose.MapType
+import com.google.maps.android.compose.MapUiSettings
+import com.google.maps.android.compose.Marker
+import com.google.maps.android.compose.Polyline
+import com.google.maps.android.compose.rememberCameraPositionState
+import com.google.maps.android.compose.rememberMarkerState
+import com.pigeonpost.R
 import com.pigeonpost.data.model.MessageStatus
 import com.pigeonpost.ui.components.ParchmentBackground
 import com.pigeonpost.ui.theme.DeepBrown700
@@ -55,17 +69,7 @@ import com.pigeonpost.ui.theme.Parchment300
 import com.pigeonpost.ui.theme.RoyalBlue800
 import com.pigeonpost.ui.theme.WaxSealRed400
 import com.pigeonpost.ui.theme.WaxSealRed500
-import org.osmdroid.tileprovider.tilesource.TileSourceFactory
-import org.osmdroid.util.BoundingBox
-import org.osmdroid.util.GeoPoint
-import org.osmdroid.views.CustomZoomButtonsController
-import org.osmdroid.views.MapView
-import org.osmdroid.views.overlay.Marker
-import org.osmdroid.views.overlay.Polyline
-import java.util.concurrent.atomic.AtomicBoolean
 import kotlin.math.abs
-import kotlin.math.max
-import kotlin.math.min
 
 /** Number of sampled points used to draw a route leg. */
 private const val ROUTE_SAMPLES = 64
@@ -76,13 +80,17 @@ private const val MIN_BOUNDS_SPAN_DEG = 0.02
 /** Padding, in pixels, left around the route when framing the camera. */
 private const val BOUNDS_PADDING_PX = 64
 
+/** Zoom used for the very first frame, before the route bounds are applied. */
+private const val INITIAL_ZOOM = 5f
+
 /**
- * Shows the pigeon's real position on a real OpenStreetMap chart.
+ * Shows the pigeon's real position on a real Google Maps chart.
  *
  * Everything plotted here comes from the actual latitude/longitude in
  * [PigeonMapUiState] - the sender's position, the recipient's position, the route, and
- * the bird's live interpolated position at 60 km/h. The map is framed in a decorative
- * border and topped with a compass rose so it still reads as a chart in an old atlas.
+ * the bird's live interpolated position at 60 km/h. The map is styled in aged sepia,
+ * framed in a decorative border and topped with a compass rose so it still reads as a
+ * chart in an old atlas.
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -92,6 +100,12 @@ fun PigeonMapScreen(
     viewModel: PigeonMapViewModel = hiltViewModel()
 ) {
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
+    val locationPermissionGranted by viewModel.locationPermissionGranted
+        .collectAsStateWithLifecycle()
+
+    LaunchedEffect(Unit) {
+        viewModel.refreshLocationPermission()
+    }
 
     ParchmentBackground {
         Scaffold(
@@ -159,6 +173,7 @@ fun PigeonMapScreen(
                         else -> {
                             RealPigeonMap(
                                 uiState = uiState,
+                                showMyLocation = locationPermissionGranted,
                                 modifier = Modifier.fillMaxSize()
                             )
                             CompassRose(
@@ -253,161 +268,160 @@ private fun AncientChartFrame(
 }
 
 /**
- * A real OpenStreetMap view (osmdroid - no API key required) plotting the actual
- * journey. The MapView is created once, kept across recompositions, driven through
- * [AndroidView]'s update block, and tied to the host lifecycle so it is resumed,
- * paused and detached properly rather than leaking.
+ * A real Google Map plotting the actual journey, dressed in an aged sepia style.
+ *
+ * The markers and both polylines are driven straight off [PigeonMapUiState], so the
+ * pigeon keeps moving across the chart as the flight ticks along. The camera is fitted
+ * to the whole route once the map has finished loading, then the user is left in control.
+ *
+ * @param showMyLocation only true while a location permission is actually held
  */
 @Composable
 private fun RealPigeonMap(
     uiState: PigeonMapUiState,
+    showMyLocation: Boolean,
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
-    val lifecycleOwner = LocalLifecycleOwner.current
 
-    val mapView = remember {
-        MapView(context).apply {
-            setTileSource(TileSourceFactory.MAPNIK)
-            setMultiTouchControls(true)
-            isTilesScaledToDpi = true
-            setUseDataConnection(true)
-            minZoomLevel = 2.0
-            zoomController.setVisibility(CustomZoomButtonsController.Visibility.NEVER)
-        }
+    val origin = LatLng(uiState.senderLat, uiState.senderLng)
+    val destination = LatLng(uiState.receiverLat, uiState.receiverLng)
+    val pigeon = LatLng(uiState.pigeonLat, uiState.pigeonLng)
+
+    // Aged parchment tiles instead of default modern Google colours.
+    val mapStyle = remember {
+        runCatching {
+            MapStyleOptions.loadRawResourceStyle(context, R.raw.map_style_aged_atlas)
+        }.getOrNull()
     }
 
-    // Full route: dashed sepia ink.
-    val routeLine = remember {
-        Polyline(mapView).apply {
-            outlinePaint.color = DeepBrown700.copy(alpha = 0.75f).toArgb()
-            outlinePaint.strokeWidth = 7f
-            outlinePaint.strokeCap = android.graphics.Paint.Cap.ROUND
-            outlinePaint.pathEffect = DashPathEffect(floatArrayOf(22f, 14f), 0f)
-            setInfoWindow(null)
-        }
+    val originIcon = remember {
+        MapMarkerIcons.locationPin(
+            context = context,
+            fillColor = RoyalBlue800.toArgb(),
+            ringColor = DeepBrown800.toArgb()
+        )
+    }
+    val destinationIcon = remember {
+        MapMarkerIcons.locationPin(
+            context = context,
+            fillColor = WaxSealRed500.toArgb(),
+            ringColor = DeepBrown800.toArgb()
+        )
+    }
+    val pigeonIcon = remember {
+        MapMarkerIcons.pigeon(
+            context = context,
+            bodyColor = DeepBrown800.toArgb(),
+            glowColor = GoldAccent400.toArgb()
+        )
+    }
+    val deathIcon = remember {
+        MapMarkerIcons.deathCross(
+            context = context,
+            color = WaxSealRed500.toArgb()
+        )
     }
 
-    // Distance already flown: solid gold.
-    val flownLine = remember {
-        Polyline(mapView).apply {
-            outlinePaint.color = GoldAccent500.toArgb()
-            outlinePaint.strokeWidth = 11f
-            outlinePaint.strokeCap = android.graphics.Paint.Cap.ROUND
-            setInfoWindow(null)
-        }
+    val originState = rememberMarkerState(position = origin)
+    val destinationState = rememberMarkerState(position = destination)
+    val pigeonState = rememberMarkerState(position = pigeon)
+
+    // The bird's marker follows every state update, so it visibly crosses the chart.
+    LaunchedEffect(origin) { originState.position = origin }
+    LaunchedEffect(destination) { destinationState.position = destination }
+    LaunchedEffect(pigeon) { pigeonState.position = pigeon }
+
+    val cameraPositionState = rememberCameraPositionState {
+        position = CameraPosition.fromLatLngZoom(midpoint(origin, destination), INITIAL_ZOOM)
     }
 
-    val originMarker = remember {
-        Marker(mapView).apply {
-            icon = MapMarkerIcons.locationPin(
-                context = context,
-                fillColor = RoyalBlue800.toArgb(),
-                ringColor = DeepBrown800.toArgb()
+    var mapLoaded by remember { mutableStateOf(false) }
+    var hasFramedRoute by remember { mutableStateOf(false) }
+
+    // Frame the whole journey once the map is measured, with padding around it.
+    LaunchedEffect(mapLoaded, origin, destination) {
+        if (!mapLoaded || hasFramedRoute || !hasRealCoordinates(uiState)) return@LaunchedEffect
+        hasFramedRoute = true
+        runCatching {
+            cameraPositionState.move(
+                CameraUpdateFactory.newLatLngBounds(
+                    routeBounds(origin, destination),
+                    BOUNDS_PADDING_PX
+                )
             )
-            title = "Dispatched from here"
-            setAnchor(Marker.ANCHOR_CENTER, Marker.ANCHOR_BOTTOM)
         }
     }
 
-    val destinationMarker = remember {
-        Marker(mapView).apply {
-            icon = MapMarkerIcons.locationPin(
-                context = context,
-                fillColor = WaxSealRed500.toArgb(),
-                ringColor = DeepBrown800.toArgb()
-            )
-            title = "Destination"
-            setAnchor(Marker.ANCHOR_CENTER, Marker.ANCHOR_BOTTOM)
-        }
-    }
-
-    val pigeonMarker = remember {
-        Marker(mapView).apply {
-            icon = MapMarkerIcons.pigeon(
-                context = context,
-                bodyColor = DeepBrown800.toArgb(),
-                glowColor = GoldAccent400.toArgb()
-            )
-            title = "Thy pigeon"
-            setAnchor(Marker.ANCHOR_CENTER, Marker.ANCHOR_CENTER)
-        }
-    }
-
-    val deathMarker = remember {
-        Marker(mapView).apply {
-            icon = MapMarkerIcons.deathCross(
-                context = context,
-                color = WaxSealRed500.toArgb()
-            )
-            title = "Here the pigeon perished"
-            setAnchor(Marker.ANCHOR_CENTER, Marker.ANCHOR_CENTER)
-        }
-    }
-
-    // The camera is fitted to the route once, then the user is left in control.
-    // Deliberately not snapshot state: it is written from the update block below.
-    val hasFramedRoute = remember { AtomicBoolean(false) }
-
-    DisposableEffect(lifecycleOwner) {
-        if (lifecycleOwner.lifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED)) {
-            mapView.onResume()
-        }
-        val observer = LifecycleEventObserver { _, event ->
-            when (event) {
-                Lifecycle.Event.ON_RESUME -> mapView.onResume()
-                Lifecycle.Event.ON_PAUSE -> mapView.onPause()
-                else -> Unit
-            }
-        }
-        lifecycleOwner.lifecycle.addObserver(observer)
-        onDispose {
-            lifecycleOwner.lifecycle.removeObserver(observer)
-            mapView.onPause()
-            mapView.onDetach()
-        }
-    }
-
-    AndroidView(
-        factory = { mapView },
+    GoogleMap(
         modifier = modifier,
-        update = { map ->
-            val origin = GeoPoint(uiState.senderLat, uiState.senderLng)
-            val destination = GeoPoint(uiState.receiverLat, uiState.receiverLng)
-            val pigeon = GeoPoint(uiState.pigeonLat, uiState.pigeonLng)
+        cameraPositionState = cameraPositionState,
+        onMapLoaded = { mapLoaded = true },
+        properties = MapProperties(
+            mapType = MapType.NORMAL,
+            mapStyleOptions = mapStyle,
+            isMyLocationEnabled = showMyLocation,
+            minZoomPreference = 2f
+        ),
+        uiSettings = MapUiSettings(
+            compassEnabled = false,
+            mapToolbarEnabled = false,
+            zoomControlsEnabled = false,
+            myLocationButtonEnabled = showMyLocation,
+            rotationGesturesEnabled = false,
+            tiltGesturesEnabled = false
+        )
+    ) {
+        // Full route: dashed sepia ink.
+        Polyline(
+            points = samplePath(origin, destination),
+            color = DeepBrown700.copy(alpha = 0.75f),
+            width = 7f,
+            pattern = listOf(Dash(22f), Gap(14f)),
+            startCap = RoundCap(),
+            endCap = RoundCap()
+        )
 
-            routeLine.setPoints(samplePath(origin, destination))
-            flownLine.setPoints(samplePath(origin, pigeon))
-            originMarker.position = origin
-            destinationMarker.position = destination
-            pigeonMarker.position = pigeon
-            deathMarker.position = pigeon
+        // Distance already flown: solid gold.
+        Polyline(
+            points = samplePath(origin, pigeon),
+            color = GoldAccent500,
+            width = 11f,
+            startCap = RoundCap(),
+            endCap = RoundCap()
+        )
 
-            if (map.overlays.isEmpty()) {
-                map.overlays.add(routeLine)
-                map.overlays.add(flownLine)
-                map.overlays.add(originMarker)
-                map.overlays.add(destinationMarker)
-            }
+        Marker(
+            state = originState,
+            icon = originIcon,
+            title = "Dispatched from here",
+            anchor = Offset(0.5f, 1f)
+        )
 
-            // A perished pigeon is replaced by a cross at the spot where it fell.
-            val bird = if (uiState.status == MessageStatus.LOST) deathMarker else pigeonMarker
-            val stale = if (uiState.status == MessageStatus.LOST) pigeonMarker else deathMarker
-            map.overlays.remove(stale)
-            if (!map.overlays.contains(bird)) {
-                map.overlays.add(bird)
-            }
+        Marker(
+            state = destinationState,
+            icon = destinationIcon,
+            title = "Destination",
+            anchor = Offset(0.5f, 1f)
+        )
 
-            if (hasRealCoordinates(uiState) && hasFramedRoute.compareAndSet(false, true)) {
-                val bounds = routeBounds(origin, destination)
-                map.post {
-                    map.zoomToBoundingBox(bounds, false, BOUNDS_PADDING_PX)
-                }
-            }
-
-            map.invalidate()
+        // A perished pigeon is replaced by a cross at the exact spot where it fell.
+        if (uiState.status == MessageStatus.LOST) {
+            Marker(
+                state = pigeonState,
+                icon = deathIcon,
+                title = "Here the pigeon perished",
+                anchor = Offset(0.5f, 0.5f)
+            )
+        } else {
+            Marker(
+                state = pigeonState,
+                icon = pigeonIcon,
+                title = "Thy pigeon",
+                anchor = Offset(0.5f, 0.5f)
+            )
         }
-    )
+    }
 }
 
 /**
@@ -416,25 +430,31 @@ private fun RealPigeonMap(
  * always sits exactly on the drawn line, and the many segments let the line follow the
  * map's curved Mercator projection instead of being drawn as one straight screen chord.
  */
-private fun samplePath(start: GeoPoint, end: GeoPoint): List<GeoPoint> {
+private fun samplePath(start: LatLng, end: LatLng): List<LatLng> {
     return (0..ROUTE_SAMPLES).map { step ->
         val fraction = step.toDouble() / ROUTE_SAMPLES
-        GeoPoint(
+        LatLng(
             start.latitude + (end.latitude - start.latitude) * fraction,
             start.longitude + (end.longitude - start.longitude) * fraction
         )
     }
 }
 
+/** Halfway point between the two ends of the journey, used for the first camera frame. */
+private fun midpoint(origin: LatLng, destination: LatLng): LatLng = LatLng(
+    (origin.latitude + destination.latitude) / 2,
+    (origin.longitude + destination.longitude) / 2
+)
+
 /**
- * Bounding box covering the whole journey, widened so a very short hop does not zoom
- * all the way in on a single street.
+ * Bounds covering the whole journey, widened so a very short hop does not zoom all the
+ * way in on a single street.
  */
-private fun routeBounds(origin: GeoPoint, destination: GeoPoint): BoundingBox {
-    var north = max(origin.latitude, destination.latitude)
-    var south = min(origin.latitude, destination.latitude)
-    var east = max(origin.longitude, destination.longitude)
-    var west = min(origin.longitude, destination.longitude)
+private fun routeBounds(origin: LatLng, destination: LatLng): LatLngBounds {
+    var north = maxOf(origin.latitude, destination.latitude)
+    var south = minOf(origin.latitude, destination.latitude)
+    var east = maxOf(origin.longitude, destination.longitude)
+    var west = minOf(origin.longitude, destination.longitude)
 
     if (north - south < MIN_BOUNDS_SPAN_DEG) {
         val pad = (MIN_BOUNDS_SPAN_DEG - (north - south)) / 2
@@ -447,7 +467,7 @@ private fun routeBounds(origin: GeoPoint, destination: GeoPoint): BoundingBox {
         west = (west - pad).coerceAtLeast(-180.0)
     }
 
-    return BoundingBox(north, east, south, west)
+    return LatLngBounds(LatLng(south, west), LatLng(north, east))
 }
 
 /** Guards against framing the camera on placeholder (0,0) coordinates. */

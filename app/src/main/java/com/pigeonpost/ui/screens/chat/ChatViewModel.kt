@@ -40,7 +40,12 @@ data class ChatUiState(
     val pendingAttachmentUri: String? = null,
     val pendingAttachmentName: String? = null,
     val isUploading: Boolean = false,
-    val deliveryAnimationMessage: Message? = null
+    val deliveryAnimationMessage: Message? = null,
+    /**
+     * Set when the last pigeon was dispatched from a fallback position instead of the
+     * device's real one, so the user is told rather than silently misplaced.
+     */
+    val locationNotice: String? = null
 )
 
 @HiltViewModel
@@ -160,6 +165,11 @@ class ChatViewModel @Inject constructor(
         _uiState.update { it.copy(deliveryAnimationMessage = null) }
     }
 
+    /** Dismisses the "approximate roost" notice after the user has read it. */
+    fun dismissLocationNotice() {
+        _uiState.update { it.copy(locationNotice = null) }
+    }
+
     private suspend fun uploadAttachment(messageId: String, uri: Uri, fileName: String): String? {
         return try {
             val currentUserId = _uiState.value.currentUserId
@@ -186,8 +196,11 @@ class ChatViewModel @Inject constructor(
         viewModelScope.launch {
             _uiState.update { it.copy(isUploading = attachmentUri != null) }
 
-            // Get actual sender location from location provider
-            val (senderLat, senderLng) = locationProvider.getCurrentLocation()
+            // The device's real GPS position, or a flagged fallback if it cannot be read.
+            val fix = locationProvider.getCurrentLocationFix()
+            val senderLat = fix.latitude
+            val senderLng = fix.longitude
+            _uiState.update { it.copy(locationNotice = fix.fallbackReason?.message) }
 
             // Persist our own coordinates so the other party can compute a real
             // return distance for their pigeons.

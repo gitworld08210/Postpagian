@@ -4,11 +4,13 @@ import android.content.Context
 import com.pigeonpost.data.repository.AuthRepository
 import com.pigeonpost.data.repository.MessageRepository
 import com.pigeonpost.data.repository.UserRepository
+import com.pigeonpost.data.location.FusedLocationProvider
 import com.pigeonpost.data.supabase.createPigeonPostSupabaseClient
 import com.pigeonpost.domain.DefaultLocationProvider
 import com.pigeonpost.domain.DeliverySimulator
 import com.pigeonpost.domain.LocationProvider
 import com.pigeonpost.domain.PigeonDeliveryCalculator
+import com.pigeonpost.utils.LocationPermissionMonitor
 import com.pigeonpost.utils.NotificationHelper
 import com.pigeonpost.utils.SoundManager
 import dagger.Module
@@ -61,8 +63,23 @@ object AppModule {
 
     @Provides
     @Singleton
-    fun provideLocationProvider(): LocationProvider {
-        return DefaultLocationProvider()
+    fun provideLocationPermissionMonitor(
+        @ApplicationContext context: Context
+    ): LocationPermissionMonitor {
+        return LocationPermissionMonitor(context)
+    }
+
+    /**
+     * The app runs on the real device GPS. [DefaultLocationProvider] is still available
+     * for unit tests and previews, which construct it directly.
+     */
+    @Provides
+    @Singleton
+    fun provideLocationProvider(
+        @ApplicationContext context: Context,
+        permissionMonitor: LocationPermissionMonitor
+    ): LocationProvider {
+        return FusedLocationProvider(context, permissionMonitor)
     }
 
     @Provides

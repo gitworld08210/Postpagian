@@ -29,6 +29,11 @@
             </intent-filter>
         </activity>
 
+        <!-- Google Maps API key, injected from gradle.properties via manifestPlaceholders -->
+        <meta-data
+            android:name="com.google.android.geo.API_KEY"
+            android:value="${MAPS_API_KEY}" />
+
         <!-- Notification channel metadata -->
         <meta-data
             android:name="com.google.firebase.messaging.default_notification_channel_id"

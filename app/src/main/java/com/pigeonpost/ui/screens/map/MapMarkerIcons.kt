@@ -5,12 +5,13 @@ import android.graphics.Bitmap
 import android.graphics.Canvas
 import android.graphics.Paint
 import android.graphics.Path
-import android.graphics.drawable.BitmapDrawable
-import android.graphics.drawable.Drawable
+import com.google.android.gms.maps.MapsInitializer
+import com.google.android.gms.maps.model.BitmapDescriptor
+import com.google.android.gms.maps.model.BitmapDescriptorFactory
 
 /**
- * Draws the map markers programmatically so the tracker keeps its hand-inked, old-atlas
- * look on top of real OpenStreetMap tiles without shipping any image assets.
+ * Draws the Google Maps markers programmatically so the tracker keeps its hand-inked,
+ * old-atlas look on top of real map tiles without shipping any image assets.
  */
 internal object MapMarkerIcons {
 
@@ -23,7 +24,7 @@ internal object MapMarkerIcons {
         fillColor: Int,
         ringColor: Int,
         sizeDp: Int = 26
-    ): Drawable {
+    ): BitmapDescriptor {
         val width = context.px(sizeDp)
         val height = context.px((sizeDp * 1.4f).toInt())
         val bitmap = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
@@ -51,7 +52,7 @@ internal object MapMarkerIcons {
         paint.color = PALE_INK
         canvas.drawCircle(centerX, centerY, radius * 0.3f, paint)
 
-        return BitmapDrawable(context.resources, bitmap)
+        return bitmap.toDescriptor(context)
     }
 
     /**
@@ -63,7 +64,7 @@ internal object MapMarkerIcons {
         bodyColor: Int,
         glowColor: Int,
         sizeDp: Int = 34
-    ): Drawable {
+    ): BitmapDescriptor {
         val size = context.px(sizeDp)
         val bitmap = Bitmap.createBitmap(size, size, Bitmap.Config.ARGB_8888)
         val canvas = Canvas(bitmap)
@@ -90,7 +91,7 @@ internal object MapMarkerIcons {
         canvas.drawLine(center - wing, center - center * 0.28f, center, center, paint)
         canvas.drawLine(center + wing, center - center * 0.28f, center, center, paint)
 
-        return BitmapDrawable(context.resources, bitmap)
+        return bitmap.toDescriptor(context)
     }
 
     /**
@@ -100,7 +101,7 @@ internal object MapMarkerIcons {
         context: Context,
         color: Int,
         sizeDp: Int = 30
-    ): Drawable {
+    ): BitmapDescriptor {
         val size = context.px(sizeDp)
         val bitmap = Bitmap.createBitmap(size, size, Bitmap.Config.ARGB_8888)
         val canvas = Canvas(bitmap)
@@ -120,11 +121,21 @@ internal object MapMarkerIcons {
         canvas.drawLine(center - arm, center - arm, center + arm, center + arm, paint)
         canvas.drawLine(center + arm, center - arm, center - arm, center + arm, paint)
 
-        return BitmapDrawable(context.resources, bitmap)
+        return bitmap.toDescriptor(context)
     }
 
     /** Parchment cream, matching the app's palette. */
     private const val PALE_INK = 0xFFF5E6D3.toInt()
+
+    /**
+     * [BitmapDescriptorFactory] needs the Maps SDK to have been initialised, which has
+     * not necessarily happened yet the first time a marker icon is built, so make sure
+     * of it here.
+     */
+    private fun Bitmap.toDescriptor(context: Context): BitmapDescriptor {
+        MapsInitializer.initialize(context)
+        return BitmapDescriptorFactory.fromBitmap(this)
+    }
 
     private fun Context.px(dp: Int): Int =
         (dp * resources.displayMetrics.density).toInt().coerceAtLeast(1)

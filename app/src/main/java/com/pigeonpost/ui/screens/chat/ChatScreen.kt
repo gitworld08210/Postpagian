@@ -29,6 +29,7 @@ import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.Send
 import androidx.compose.material.icons.filled.AttachFile
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.LocationOff
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
@@ -136,31 +137,43 @@ fun ChatScreen(
                     )
                 }
             ) { padding ->
-                LazyColumn(
+                Column(
                     modifier = Modifier
                         .fillMaxSize()
                         .padding(padding)
-                        .padding(horizontal = 12.dp),
-                    state = listState,
-                    verticalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
-                    items(uiState.messages) { message ->
-                        MessageBubble(
-                            message = message,
-                            isOwn = message.senderId == uiState.currentUserId,
-                            onMapClick = { onNavigateToMap(message.id) },
-                            onImageClick = { url ->
-                                val intent = Intent(Intent.ACTION_VIEW, Uri.parse(url))
-                                context.startActivity(intent)
-                            },
-                            onPdfClick = { url ->
-                                val intent = Intent(Intent.ACTION_VIEW, Uri.parse(url)).apply {
-                                    setDataAndType(Uri.parse(url), "application/pdf")
-                                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                                }
-                                context.startActivity(intent)
-                            }
+                    uiState.locationNotice?.let { notice ->
+                        ApproximateLocationNotice(
+                            notice = notice,
+                            onDismiss = viewModel::dismissLocationNotice
                         )
+                    }
+
+                    LazyColumn(
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .padding(horizontal = 12.dp),
+                        state = listState,
+                        verticalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        items(uiState.messages) { message ->
+                            MessageBubble(
+                                message = message,
+                                isOwn = message.senderId == uiState.currentUserId,
+                                onMapClick = { onNavigateToMap(message.id) },
+                                onImageClick = { url ->
+                                    val intent = Intent(Intent.ACTION_VIEW, Uri.parse(url))
+                                    context.startActivity(intent)
+                                },
+                                onPdfClick = { url ->
+                                    val intent = Intent(Intent.ACTION_VIEW, Uri.parse(url)).apply {
+                                        setDataAndType(Uri.parse(url), "application/pdf")
+                                        addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                                    }
+                                    context.startActivity(intent)
+                                }
+                            )
+                        }
                     }
                 }
             }
@@ -173,6 +186,53 @@ fun ChatScreen(
                 visible = true,
                 onDismiss = viewModel::dismissDeliveryAnimation
             )
+        }
+    }
+}
+
+/**
+ * Warns the user that the last pigeon left from a fallback position rather than their
+ * real one - a denied permission, disabled location services or a fix that never arrived.
+ */
+@Composable
+private fun ApproximateLocationNotice(
+    notice: String,
+    onDismiss: () -> Unit
+) {
+    Card(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 12.dp, vertical = 6.dp),
+        colors = CardDefaults.cardColors(containerColor = Parchment300.copy(alpha = 0.95f))
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(start = 12.dp, top = 8.dp, bottom = 8.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Icon(
+                imageVector = Icons.Filled.LocationOff,
+                contentDescription = null,
+                tint = WaxSealRed500,
+                modifier = Modifier.size(18.dp)
+            )
+            Spacer(modifier = Modifier.width(8.dp))
+            Text(
+                text = notice,
+                style = MaterialTheme.typography.bodySmall,
+                color = DeepBrown900,
+                fontStyle = FontStyle.Italic,
+                modifier = Modifier.weight(1f)
+            )
+            IconButton(onClick = onDismiss) {
+                Icon(
+                    imageVector = Icons.Filled.Close,
+                    contentDescription = "Dismiss",
+                    tint = DeepBrown700,
+                    modifier = Modifier.size(18.dp)
+                )
+            }
         }
     }
 }

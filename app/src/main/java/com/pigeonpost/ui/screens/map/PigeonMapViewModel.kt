@@ -7,6 +7,7 @@ import com.pigeonpost.data.model.MessageStatus
 import com.pigeonpost.data.repository.MessageRepository
 import com.pigeonpost.domain.DeliverySimulator
 import com.pigeonpost.domain.PigeonDeliveryCalculator
+import com.pigeonpost.utils.LocationPermissionMonitor
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -35,7 +36,8 @@ class PigeonMapViewModel @Inject constructor(
     savedStateHandle: SavedStateHandle,
     private val messageRepository: MessageRepository,
     private val deliverySimulator: DeliverySimulator,
-    private val calculator: PigeonDeliveryCalculator
+    private val calculator: PigeonDeliveryCalculator,
+    private val locationPermissionMonitor: LocationPermissionMonitor
 ) : ViewModel() {
 
     private val messageId: String = savedStateHandle["messageId"] ?: ""
@@ -43,8 +45,19 @@ class PigeonMapViewModel @Inject constructor(
     private val _uiState = MutableStateFlow(PigeonMapUiState())
     val uiState: StateFlow<PigeonMapUiState> = _uiState.asStateFlow()
 
+    /**
+     * Whether the map may draw the viewer's own location. The my-location layer must
+     * only be switched on while a location permission is actually held.
+     */
+    val locationPermissionGranted: StateFlow<Boolean> = locationPermissionMonitor.granted
+
     init {
         loadMessageAndTrack()
+    }
+
+    /** Re-reads the permission, e.g. when the tracker screen comes back to the front. */
+    fun refreshLocationPermission() {
+        locationPermissionMonitor.refresh()
     }
 
     /**
