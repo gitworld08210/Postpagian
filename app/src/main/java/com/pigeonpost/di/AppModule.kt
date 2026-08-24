@@ -3,6 +3,7 @@ package com.pigeonpost.di
 import android.content.Context
 import com.pigeonpost.data.repository.AuthRepository
 import com.pigeonpost.data.repository.MessageRepository
+import com.pigeonpost.data.repository.UserRepository
 import com.pigeonpost.data.supabase.createPigeonPostSupabaseClient
 import com.pigeonpost.domain.DefaultLocationProvider
 import com.pigeonpost.domain.DeliverySimulator
@@ -38,6 +39,12 @@ object AppModule {
     @Singleton
     fun provideMessageRepository(supabaseClient: SupabaseClient): MessageRepository {
         return MessageRepository(supabaseClient)
+    }
+
+    @Provides
+    @Singleton
+    fun provideUserRepository(supabaseClient: SupabaseClient): UserRepository {
+        return UserRepository(supabaseClient)
     }
 
     @Provides

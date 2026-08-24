@@ -14,12 +14,15 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ExitToApp
+import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.ExtendedFloatingActionButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -28,18 +31,25 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalLifecycleOwner
 import androidx.compose.ui.text.font.FontStyle
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.pigeonpost.data.model.Conversation
 import com.pigeonpost.data.model.MessageStatus
 import com.pigeonpost.ui.components.ParchmentBackground
 import com.pigeonpost.ui.components.WaxSeal
+import com.pigeonpost.ui.theme.DeepBrown700
+import com.pigeonpost.ui.theme.DeepBrown900
 import com.pigeonpost.ui.theme.GoldAccent400
 import com.pigeonpost.ui.theme.WaxSealRed500
 
@@ -52,10 +62,24 @@ import com.pigeonpost.ui.theme.WaxSealRed500
 @Composable
 fun ConversationsScreen(
     onConversationClick: (String) -> Unit,
+    onNewConversation: () -> Unit,
     onSignOut: () -> Unit,
     viewModel: ConversationsViewModel = hiltViewModel()
 ) {
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
+
+    // Refresh whenever The Aviary comes back into the foreground, so a freshly
+    // started correspondence shows up on return from a chat.
+    val lifecycleOwner = LocalLifecycleOwner.current
+    DisposableEffect(lifecycleOwner) {
+        val observer = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_RESUME) {
+                viewModel.loadConversations()
+            }
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
+    }
 
     ParchmentBackground {
         Scaffold(
@@ -83,6 +107,27 @@ fun ConversationsScreen(
                         containerColor = MaterialTheme.colorScheme.background.copy(alpha = 0.8f)
                     )
                 )
+            },
+            floatingActionButton = {
+                // Dispatch a pigeon - opens the guild register of messengers
+                ExtendedFloatingActionButton(
+                    onClick = onNewConversation,
+                    containerColor = WaxSealRed500,
+                    contentColor = GoldAccent400,
+                    shape = CircleShape,
+                    icon = {
+                        Icon(
+                            imageVector = Icons.Filled.Edit,
+                            contentDescription = "Dispatch a pigeon to a new messenger"
+                        )
+                    },
+                    text = {
+                        Text(
+                            text = "Dispatch a Pigeon",
+                            style = MaterialTheme.typography.labelLarge
+                        )
+                    }
+                )
             }
         ) { padding ->
             Box(
@@ -105,14 +150,15 @@ fun ConversationsScreen(
                             Text(
                                 text = "No scrolls await thee",
                                 style = MaterialTheme.typography.titleMedium,
-                                color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.6f),
+                                color = DeepBrown900,
                                 fontStyle = FontStyle.Italic
                             )
                             Spacer(modifier = Modifier.height(8.dp))
                             Text(
                                 text = "Begin a correspondence to dispatch thy first pigeon",
                                 style = MaterialTheme.typography.bodyMedium,
-                                color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.4f)
+                                color = DeepBrown700.copy(alpha = 0.95f),
+                                textAlign = TextAlign.Center
                             )
                         }
                     }

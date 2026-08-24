@@ -13,6 +13,9 @@ sealed class Routes(val route: String) {
     /** List of conversations styled as sealed letters */
     data object Conversations : Routes("conversations")
 
+    /** Recipient picker listing all other registered messengers */
+    data object NewChat : Routes("new_chat")
+
     /** Chat screen with parchment message bubbles */
     data object Chat : Routes("chat/{userId}") {
         fun createRoute(userId: String): String = "chat/$userId"

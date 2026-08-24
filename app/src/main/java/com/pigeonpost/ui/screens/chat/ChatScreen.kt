@@ -29,7 +29,6 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
-import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
@@ -50,6 +49,9 @@ import com.pigeonpost.data.model.Message
 import com.pigeonpost.data.model.MessageStatus
 import com.pigeonpost.ui.animation.PigeonFlyingAnimation
 import com.pigeonpost.ui.components.ParchmentBackground
+import com.pigeonpost.ui.components.parchmentTextFieldColors
+import com.pigeonpost.ui.theme.DeepBrown700
+import com.pigeonpost.ui.theme.DeepBrown900
 import com.pigeonpost.ui.theme.GoldAccent400
 import com.pigeonpost.ui.theme.Parchment100
 import com.pigeonpost.ui.theme.Parchment300
@@ -164,7 +166,7 @@ private fun MessageBubble(
                 Text(
                     text = message.content,
                     style = MaterialTheme.typography.bodyLarge,
-                    color = MaterialTheme.colorScheme.onSurface
+                    color = DeepBrown900
                 )
 
                 Spacer(modifier = Modifier.height(4.dp))
@@ -184,7 +186,7 @@ private fun MessageBubble(
                             Text(
                                 text = "Pigeon en route...",
                                 style = MaterialTheme.typography.labelSmall,
-                                color = GoldAccent400,
+                                color = DeepBrown700,
                                 fontStyle = FontStyle.Italic
                             )
                             Spacer(modifier = Modifier.width(4.dp))
@@ -198,7 +200,7 @@ private fun MessageBubble(
                         Text(
                             text = "\u2714 Delivered by faithful pigeon",
                             style = MaterialTheme.typography.labelSmall,
-                            color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f)
+                            color = DeepBrown700.copy(alpha = 0.9f)
                         )
                     }
                     MessageStatus.LOST -> {
@@ -238,10 +240,9 @@ private fun MessageInputBar(
                     fontStyle = FontStyle.Italic
                 )
             },
-            colors = OutlinedTextFieldDefaults.colors(
-                focusedBorderColor = GoldAccent400,
-                cursorColor = GoldAccent400
-            ),
+            // Explicit dark-ink text style so what the user types is always visible
+            textStyle = MaterialTheme.typography.bodyLarge.copy(color = DeepBrown900),
+            colors = parchmentTextFieldColors(),
             shape = RoundedCornerShape(20.dp),
             maxLines = 4
         )

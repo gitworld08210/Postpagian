@@ -11,11 +11,12 @@ import com.pigeonpost.ui.screens.auth.LoginScreen
 import com.pigeonpost.ui.screens.chat.ChatScreen
 import com.pigeonpost.ui.screens.conversations.ConversationsScreen
 import com.pigeonpost.ui.screens.map.PigeonMapScreen
+import com.pigeonpost.ui.screens.newchat.NewChatScreen
 import com.pigeonpost.ui.screens.splash.SplashScreen
 
 /**
  * Main navigation graph for the PigeonPost app.
- * Routes: Splash -> (Login | Conversations) -> Chat -> PigeonMap
+ * Routes: Splash -> (Login | Conversations) -> (NewChat) -> Chat -> PigeonMap
  *
  * The splash screen checks authentication state and navigates directly
  * to Conversations if the user already has a valid session.
@@ -59,10 +60,28 @@ fun PigeonPostNavGraph(
                 onConversationClick = { userId ->
                     navController.navigate(Routes.Chat.createRoute(userId))
                 },
+                onNewConversation = {
+                    navController.navigate(Routes.NewChat.route)
+                },
                 onSignOut = {
                     navController.navigate(Routes.Login.route) {
                         popUpTo(Routes.Conversations.route) { inclusive = true }
                     }
+                }
+            )
+        }
+
+        composable(Routes.NewChat.route) {
+            NewChatScreen(
+                onUserClick = { userId ->
+                    // Replace the picker in the back stack so returning from the
+                    // chat lands back on The Aviary, which then refreshes.
+                    navController.navigate(Routes.Chat.createRoute(userId)) {
+                        popUpTo(Routes.NewChat.route) { inclusive = true }
+                    }
+                },
+                onNavigateBack = {
+                    navController.popBackStack()
                 }
             )
         }

@@ -5,8 +5,10 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.pigeonpost.data.model.Message
 import com.pigeonpost.data.model.MessageStatus
+import com.pigeonpost.data.model.User
 import com.pigeonpost.data.repository.AuthRepository
 import com.pigeonpost.data.repository.MessageRepository
+import com.pigeonpost.data.repository.UserRepository
 import com.pigeonpost.domain.DeliverySimulator
 import com.pigeonpost.domain.DeliveryUpdate
 import com.pigeonpost.domain.LocationProvider
@@ -36,6 +38,7 @@ class ChatViewModel @Inject constructor(
     savedStateHandle: SavedStateHandle,
     private val messageRepository: MessageRepository,
     private val authRepository: AuthRepository,
+    private val userRepository: UserRepository,
     private val deliverySimulator: DeliverySimulator,
     private val calculator: PigeonDeliveryCalculator,
     private val locationProvider: LocationProvider,
@@ -43,16 +46,82 @@ class ChatViewModel @Inject constructor(
     private val notificationHelper: NotificationHelper
 ) : ViewModel() {
 
+    companion object {
+        /**
+         * Distance used when the recipient has never stored coordinates.
+         * Keeps the flight meaningful (~8h20m at 60 km/h) instead of collapsing
+         * into a zero-distance instant delivery.
+         */
+        const val FALLBACK_DISTANCE_KM = 500.0
+
+        /** Approximate kilometres per degree of latitude. */
+        private const val KM_PER_DEGREE_LATITUDE = 111.32
+
+        /** Tolerance for treating stored coordinates as "unset" (0,0). */
+        private const val COORDINATE_EPSILON = 0.0001
+    }
+
     private val otherUserId: String = savedStateHandle["userId"] ?: ""
 
     private val _uiState = MutableStateFlow(ChatUiState())
     val uiState: StateFlow<ChatUiState> = _uiState.asStateFlow()
 
+    /** Recipient profile, loaded once and reused for name + coordinates. */
+    private var recipientProfile: User? = null
+
     init {
         val currentUser = authRepository.getCurrentUser()
         _uiState.update { it.copy(currentUserId = currentUser?.id ?: "") }
+        loadRecipientProfile()
         loadMessages()
         observeIncomingMessages()
+    }
+
+    /**
+     * Load the recipient's profile so the top bar shows their real display name
+     * and messages can be routed over a real geographic distance.
+     */
+    private fun loadRecipientProfile() {
+        if (otherUserId.isBlank()) return
+        viewModelScope.launch {
+            val profile = userRepository.getUserById(otherUserId)
+            recipientProfile = profile
+            val name = profile?.displayName?.takeIf { it.isNotBlank() }
+                ?: profile?.email?.substringBefore("@")?.takeIf { it.isNotBlank() }
+            if (name != null) {
+                _uiState.update { it.copy(otherUserName = name) }
+            }
+        }
+    }
+
+    /**
+     * Resolve the receiver's flight destination.
+     *
+     * Uses the recipient's last known coordinates when available. When they have
+     * never stored a location (0,0), falls back to a point [FALLBACK_DISTANCE_KM]
+     * due north (or south near the pole) of the sender, so the pigeon still has a
+     * real journey to make.
+     */
+    private fun resolveReceiverPosition(
+        senderLat: Double,
+        senderLng: Double
+    ): Pair<Double, Double> {
+        val profile = recipientProfile
+        val hasKnownLocation = profile != null &&
+            (kotlin.math.abs(profile.lastLatitude) > COORDINATE_EPSILON ||
+                kotlin.math.abs(profile.lastLongitude) > COORDINATE_EPSILON)
+
+        if (hasKnownLocation && profile != null) {
+            return profile.lastLatitude to profile.lastLongitude
+        }
+
+        val latOffset = FALLBACK_DISTANCE_KM / KM_PER_DEGREE_LATITUDE
+        val fallbackLat = if (senderLat + latOffset > 85.0) {
+            senderLat - latOffset
+        } else {
+            senderLat + latOffset
+        }
+        return fallbackLat to senderLng
     }
 
     fun updateInput(text: String) {
@@ -69,10 +138,19 @@ class ChatViewModel @Inject constructor(
             // Get actual sender location from location provider
             val (senderLat, senderLng) = locationProvider.getCurrentLocation()
 
-            // Receiver coordinates - in production these would come from receiver's profile
-            // For now, use a different default to demonstrate distance-based delivery
-            val receiverLat = PigeonDeliveryCalculator.NYC_LAT
-            val receiverLng = PigeonDeliveryCalculator.NYC_LNG
+            // Persist our own coordinates so the other party can compute a real
+            // return distance for their pigeons.
+            if (currentUserId.isNotBlank()) {
+                userRepository.updateMyLocation(currentUserId, senderLat, senderLng)
+            }
+
+            // Ensure we have the recipient's profile before computing the route.
+            if (recipientProfile == null && otherUserId.isNotBlank()) {
+                recipientProfile = userRepository.getUserById(otherUserId)
+            }
+
+            // Receiver coordinates come from the recipient's stored profile
+            val (receiverLat, receiverLng) = resolveReceiverPosition(senderLat, senderLng)
 
             val distance = calculator.calculateDistance(senderLat, senderLng, receiverLat, receiverLng)
             val deliveryTimeMs = calculator.calculateDeliveryTimeMs(distance)
@@ -145,7 +223,9 @@ class ChatViewModel @Inject constructor(
                     messageRepository.updateMessageStatus(update.messageId, MessageStatus.LOST)
                 }
                 soundManager.playDeathSound()
-                notificationHelper.showPigeonLostNotification(receiverName = "your recipient")
+                notificationHelper.showPigeonLostNotification(
+                    receiverName = _uiState.value.otherUserName
+                )
             }
             else -> { /* Flying - no action */ }
         }

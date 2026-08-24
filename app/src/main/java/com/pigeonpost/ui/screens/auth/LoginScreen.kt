@@ -16,7 +16,6 @@ import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
-import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -32,7 +31,9 @@ import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.pigeonpost.ui.components.ParchmentBackground
 import com.pigeonpost.ui.components.WaxSeal
-import com.pigeonpost.ui.theme.GoldAccent400
+import com.pigeonpost.ui.components.parchmentTextFieldColors
+import com.pigeonpost.ui.theme.DeepBrown700
+import com.pigeonpost.ui.theme.DeepBrown900
 import com.pigeonpost.ui.theme.WaxSealRed500
 
 /**
@@ -65,17 +66,18 @@ fun LoginScreen(
 
             Spacer(modifier = Modifier.height(16.dp))
 
+            // Title in dark ink so it reads clearly against the parchment
             Text(
                 text = "Pigeon Post",
                 style = MaterialTheme.typography.displayMedium,
-                color = MaterialTheme.colorScheme.onBackground,
+                color = DeepBrown900,
                 textAlign = TextAlign.Center
             )
 
             Text(
                 text = if (uiState.isSignUp) "Join the Messenger Guild" else "Enter the Aviary",
                 style = MaterialTheme.typography.titleSmall,
-                color = GoldAccent400,
+                color = DeepBrown700,
                 fontStyle = FontStyle.Italic,
                 textAlign = TextAlign.Center
             )
@@ -89,11 +91,8 @@ fun LoginScreen(
                 label = { Text("Thy Electronic Address") },
                 singleLine = true,
                 modifier = Modifier.fillMaxWidth(),
-                colors = OutlinedTextFieldDefaults.colors(
-                    focusedBorderColor = GoldAccent400,
-                    focusedLabelColor = GoldAccent400,
-                    cursorColor = GoldAccent400
-                ),
+                textStyle = MaterialTheme.typography.bodyLarge.copy(color = DeepBrown900),
+                colors = parchmentTextFieldColors(),
                 shape = RoundedCornerShape(12.dp)
             )
 
@@ -107,11 +106,8 @@ fun LoginScreen(
                 singleLine = true,
                 visualTransformation = PasswordVisualTransformation(),
                 modifier = Modifier.fillMaxWidth(),
-                colors = OutlinedTextFieldDefaults.colors(
-                    focusedBorderColor = GoldAccent400,
-                    focusedLabelColor = GoldAccent400,
-                    cursorColor = GoldAccent400
-                ),
+                textStyle = MaterialTheme.typography.bodyLarge.copy(color = DeepBrown900),
+                colors = parchmentTextFieldColors(),
                 shape = RoundedCornerShape(12.dp)
             )
 
@@ -168,7 +164,7 @@ fun LoginScreen(
                         "New messenger? Join the Guild"
                     },
                     style = MaterialTheme.typography.bodyMedium,
-                    color = GoldAccent400
+                    color = DeepBrown900
                 )
             }
         }

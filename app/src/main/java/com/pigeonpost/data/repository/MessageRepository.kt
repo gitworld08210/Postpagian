@@ -139,21 +139,21 @@ class MessageRepository @Inject constructor(
 
     /**
      * Get all conversations for the current user.
+     *
+     * The `conversations` view is a security_invoker view that is already scoped to
+     * the signed-in user via `auth.uid()` internally, so it must be selected with
+     * NO user filter. The [userId] parameter is retained for call-site
+     * compatibility and is deliberately unused.
      */
+    @Suppress("UNUSED_PARAMETER")
     suspend fun getConversations(userId: String): Result<List<Conversation>> {
         return try {
             val conversations = supabaseClient.postgrest[CONVERSATIONS_TABLE]
-                .select() {
-                    filter {
-                        or {
-                            eq("user_id_1", userId)
-                            eq("user_id_2", userId)
-                        }
-                    }
-                }
+                .select()
                 .decodeList<Conversation>()
             Result.success(conversations)
         } catch (e: Exception) {
+            Log.e(TAG, "Failed to load conversations", e)
             Result.failure(e)
         }
     }

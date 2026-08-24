@@ -1,7 +1,6 @@
 package com.pigeonpost.ui.theme
 
 import android.app.Activity
-import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.darkColorScheme
 import androidx.compose.material3.lightColorScheme
@@ -11,6 +10,13 @@ import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.platform.LocalView
 import androidx.core.view.WindowCompat
 
+/**
+ * Retained for reference only. It is intentionally NOT applied: the PigeonPost
+ * aesthetic is aged light parchment, and [ParchmentBackground] always paints a
+ * light cream sheet. Applying a dark scheme rendered cream ink on cream
+ * parchment, making every label, placeholder and typed character invisible.
+ */
+@Suppress("unused")
 private val DarkColorScheme = darkColorScheme(
     primary = GoldAccent400,
     secondary = RoyalBlue800,
@@ -41,19 +47,24 @@ private val LightColorScheme = lightColorScheme(
     onSurfaceVariant = DeepBrown700
 )
 
+/**
+ * PigeonPost always renders the parchment (light) color scheme, regardless of the
+ * system dark-mode setting. The parchment background is painted by the app itself
+ * and is always light cream, so the ink must always be dark to stay readable.
+ */
 @Composable
 fun PigeonPostTheme(
-    darkTheme: Boolean = isSystemInDarkTheme(),
     content: @Composable () -> Unit
 ) {
-    val colorScheme = if (darkTheme) DarkColorScheme else LightColorScheme
+    val colorScheme = LightColorScheme
 
     val view = LocalView.current
     if (!view.isInEditMode) {
         SideEffect {
             val window = (view.context as Activity).window
             window.statusBarColor = colorScheme.primary.toArgb()
-            WindowCompat.getInsetsController(window, view).isAppearanceLightStatusBars = !darkTheme
+            // The status bar is DeepBrown900 (dark), so its icons must be light.
+            WindowCompat.getInsetsController(window, view).isAppearanceLightStatusBars = false
         }
     }
 
