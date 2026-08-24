@@ -80,10 +80,15 @@ class AuthViewModel @Inject constructor(
                     _uiState.update { it.copy(isLoading = false, isAuthenticated = true) }
                 },
                 onFailure = { e ->
+                    val errorMessage = if (e.message?.contains("timeout", ignoreCase = true) == true) {
+                        "The guild's scribes are slow to respond. Pray try once more."
+                    } else {
+                        e.message ?: "Authentication failed"
+                    }
                     _uiState.update {
                         it.copy(
                             isLoading = false,
-                            error = e.message ?: "Authentication failed"
+                            error = errorMessage
                         )
                     }
                 }
