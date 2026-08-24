@@ -77,6 +77,18 @@ open class AuthRepository @Inject constructor(
     }
 
     /**
+     * Send a password reset email to the given address.
+     */
+    open suspend fun sendPasswordReset(email: String): Result<Unit> {
+        return try {
+            supabaseClient.auth.resetPasswordForEmail(email = email)
+            Result.success(Unit)
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
+    }
+
+    /**
      * Observe authentication state changes.
      */
     fun observeAuthState(): Flow<Boolean> {

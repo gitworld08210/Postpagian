@@ -1,5 +1,7 @@
 package com.pigeonpost.ui.screens.chat
 
+import android.content.Context
+import android.net.Uri
 import androidx.lifecycle.SavedStateHandle
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
@@ -16,6 +18,10 @@ import com.pigeonpost.domain.PigeonDeliveryCalculator
 import com.pigeonpost.utils.NotificationHelper
 import com.pigeonpost.utils.SoundManager
 import dagger.hilt.android.lifecycle.HiltViewModel
+import dagger.hilt.android.qualifiers.ApplicationContext
+import io.github.jan.supabase.SupabaseClient
+import io.github.jan.supabase.storage.storage
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -30,7 +36,11 @@ data class ChatUiState(
     val isLoading: Boolean = false,
     val otherUserName: String = "Fellow Messenger",
     val currentUserId: String = "",
-    val error: String? = null
+    val error: String? = null,
+    val pendingAttachmentUri: String? = null,
+    val pendingAttachmentName: String? = null,
+    val isUploading: Boolean = false,
+    val deliveryAnimationMessage: Message? = null
 )
 
 @HiltViewModel
@@ -43,7 +53,9 @@ class ChatViewModel @Inject constructor(
     private val calculator: PigeonDeliveryCalculator,
     private val locationProvider: LocationProvider,
     private val soundManager: SoundManager,
-    private val notificationHelper: NotificationHelper
+    private val notificationHelper: NotificationHelper,
+    private val supabaseClient: SupabaseClient,
+    @ApplicationContext private val appContext: Context
 ) : ViewModel() {
 
     companion object {
@@ -128,13 +140,49 @@ class ChatViewModel @Inject constructor(
         _uiState.update { it.copy(inputText = text) }
     }
 
+    fun setAttachment(uri: Uri, fileName: String?) {
+        _uiState.update {
+            it.copy(
+                pendingAttachmentUri = uri.toString(),
+                pendingAttachmentName = fileName ?: "attachment"
+            )
+        }
+    }
+
+    fun clearAttachment() {
+        _uiState.update { it.copy(pendingAttachmentUri = null, pendingAttachmentName = null) }
+    }
+
+    fun dismissDeliveryAnimation() {
+        _uiState.update { it.copy(deliveryAnimationMessage = null) }
+    }
+
+    private suspend fun uploadAttachment(messageId: String, uri: Uri, fileName: String): String? {
+        return try {
+            val currentUserId = _uiState.value.currentUserId
+            val contentResolver = appContext.contentResolver
+            val bytes = contentResolver.openInputStream(uri)?.readBytes() ?: return null
+            val path = "$currentUserId/$messageId/$fileName"
+            supabaseClient.storage.from("pigeon-attachments").upload(path, bytes)
+            val publicUrl = supabaseClient.storage.from("pigeon-attachments").publicUrl(path)
+            publicUrl
+        } catch (e: Exception) {
+            null
+        }
+    }
+
     fun sendMessage() {
         val content = _uiState.value.inputText.trim()
-        if (content.isBlank()) return
+        val attachmentUri = _uiState.value.pendingAttachmentUri
+        val attachmentName = _uiState.value.pendingAttachmentName
+
+        if (content.isBlank() && attachmentUri == null) return
 
         val currentUserId = _uiState.value.currentUserId
 
         viewModelScope.launch {
+            _uiState.update { it.copy(isUploading = attachmentUri != null) }
+
             // Get actual sender location from location provider
             val (senderLat, senderLng) = locationProvider.getCurrentLocation()
 
@@ -155,8 +203,16 @@ class ChatViewModel @Inject constructor(
             val distance = calculator.calculateDistance(senderLat, senderLng, receiverLat, receiverLng)
             val deliveryTimeMs = calculator.calculateDeliveryTimeMs(distance)
 
+            val messageId = UUID.randomUUID().toString()
+
+            // Upload attachment if present
+            var attachmentUrl: String? = null
+            if (attachmentUri != null && attachmentName != null) {
+                attachmentUrl = uploadAttachment(messageId, Uri.parse(attachmentUri), attachmentName)
+            }
+
             val message = Message(
-                id = UUID.randomUUID().toString(),
+                id = messageId,
                 senderId = currentUserId,
                 receiverId = otherUserId,
                 content = content,
@@ -168,13 +224,17 @@ class ChatViewModel @Inject constructor(
                 receiverLat = receiverLat,
                 receiverLng = receiverLng,
                 pigeonCurrentLat = senderLat,
-                pigeonCurrentLng = senderLng
+                pigeonCurrentLng = senderLng,
+                attachmentUrl = attachmentUrl
             )
 
             _uiState.update {
                 it.copy(
                     messages = it.messages + message,
-                    inputText = ""
+                    inputText = "",
+                    pendingAttachmentUri = null,
+                    pendingAttachmentName = null,
+                    isUploading = false
                 )
             }
 
@@ -213,6 +273,21 @@ class ChatViewModel @Inject constructor(
                     messageRepository.updateMessageStatus(update.messageId, MessageStatus.DELIVERED)
                 }
                 soundManager.playDeliveryChime()
+
+                // Trigger delivery animation for incoming messages
+                val message = _uiState.value.messages.find { it.id == update.messageId }
+                if (message != null && message.senderId != _uiState.value.currentUserId) {
+                    _uiState.update { it.copy(deliveryAnimationMessage = message) }
+                    viewModelScope.launch {
+                        delay(3000L)
+                        _uiState.update { state ->
+                            if (state.deliveryAnimationMessage?.id == update.messageId) {
+                                state.copy(deliveryAnimationMessage = null)
+                            } else state
+                        }
+                    }
+                }
+
                 notificationHelper.showDeliveryNotification(
                     senderName = "Your Pigeon",
                     messagePreview = "Message delivered by faithful pigeon"

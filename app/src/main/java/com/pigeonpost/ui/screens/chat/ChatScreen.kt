@@ -1,5 +1,10 @@
 package com.pigeonpost.ui.screens.chat
 
+import android.content.Intent
+import android.net.Uri
+import android.provider.OpenableColumns
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -22,8 +27,11 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.Send
+import androidx.compose.material.icons.filled.AttachFile
+import androidx.compose.material.icons.filled.Close
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -40,13 +48,18 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import coil.compose.AsyncImage
 import com.pigeonpost.data.model.Message
 import com.pigeonpost.data.model.MessageStatus
+import com.pigeonpost.ui.animation.PigeonDeliveryAnimation
 import com.pigeonpost.ui.animation.PigeonFlyingAnimation
 import com.pigeonpost.ui.components.ParchmentBackground
 import com.pigeonpost.ui.components.parchmentTextFieldColors
@@ -74,6 +87,7 @@ fun ChatScreen(
 ) {
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
     val listState = rememberLazyListState()
+    val context = LocalContext.current
 
     // Auto-scroll to bottom when new messages arrive
     LaunchedEffect(uiState.messages.size) {
@@ -82,54 +96,83 @@ fun ChatScreen(
         }
     }
 
-    ParchmentBackground {
-        Scaffold(
-            containerColor = Color.Transparent,
-            topBar = {
-                TopAppBar(
-                    title = {
-                        Text(
-                            text = uiState.otherUserName,
-                            style = MaterialTheme.typography.titleLarge
-                        )
-                    },
-                    navigationIcon = {
-                        IconButton(onClick = onNavigateBack) {
-                            Icon(
-                                imageVector = Icons.AutoMirrored.Filled.ArrowBack,
-                                contentDescription = "Back"
+    Box(modifier = Modifier.fillMaxSize()) {
+        ParchmentBackground {
+            Scaffold(
+                containerColor = Color.Transparent,
+                topBar = {
+                    TopAppBar(
+                        title = {
+                            Text(
+                                text = uiState.otherUserName,
+                                style = MaterialTheme.typography.titleLarge
                             )
-                        }
-                    },
-                    colors = TopAppBarDefaults.topAppBarColors(
-                        containerColor = MaterialTheme.colorScheme.background.copy(alpha = 0.9f)
+                        },
+                        navigationIcon = {
+                            IconButton(onClick = onNavigateBack) {
+                                Icon(
+                                    imageVector = Icons.AutoMirrored.Filled.ArrowBack,
+                                    contentDescription = "Back"
+                                )
+                            }
+                        },
+                        colors = TopAppBarDefaults.topAppBarColors(
+                            containerColor = MaterialTheme.colorScheme.background.copy(alpha = 0.9f)
+                        )
                     )
-                )
-            },
-            bottomBar = {
-                MessageInputBar(
-                    text = uiState.inputText,
-                    onTextChange = viewModel::updateInput,
-                    onSend = viewModel::sendMessage
-                )
-            }
-        ) { padding ->
-            LazyColumn(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .padding(padding)
-                    .padding(horizontal = 12.dp),
-                state = listState,
-                verticalArrangement = Arrangement.spacedBy(8.dp)
-            ) {
-                items(uiState.messages) { message ->
-                    MessageBubble(
-                        message = message,
-                        isOwn = message.senderId == uiState.currentUserId,
-                        onMapClick = { onNavigateToMap(message.id) }
+                },
+                bottomBar = {
+                    MessageInputBar(
+                        text = uiState.inputText,
+                        onTextChange = viewModel::updateInput,
+                        onSend = viewModel::sendMessage,
+                        onAttachmentSelected = { uri ->
+                            val fileName = getFileName(context, uri) ?: "attachment"
+                            viewModel.setAttachment(uri, fileName)
+                        },
+                        pendingAttachmentName = uiState.pendingAttachmentName,
+                        onClearAttachment = viewModel::clearAttachment,
+                        isUploading = uiState.isUploading
                     )
                 }
+            ) { padding ->
+                LazyColumn(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .padding(padding)
+                        .padding(horizontal = 12.dp),
+                    state = listState,
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    items(uiState.messages) { message ->
+                        MessageBubble(
+                            message = message,
+                            isOwn = message.senderId == uiState.currentUserId,
+                            onMapClick = { onNavigateToMap(message.id) },
+                            onImageClick = { url ->
+                                val intent = Intent(Intent.ACTION_VIEW, Uri.parse(url))
+                                context.startActivity(intent)
+                            },
+                            onPdfClick = { url ->
+                                val intent = Intent(Intent.ACTION_VIEW, Uri.parse(url)).apply {
+                                    setDataAndType(Uri.parse(url), "application/pdf")
+                                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                                }
+                                context.startActivity(intent)
+                            }
+                        )
+                    }
+                }
             }
+        }
+
+        // Pigeon delivery animation overlay
+        uiState.deliveryAnimationMessage?.let { message ->
+            PigeonDeliveryAnimation(
+                messageText = message.content,
+                visible = true,
+                onDismiss = viewModel::dismissDeliveryAnimation
+            )
         }
     }
 }
@@ -138,7 +181,9 @@ fun ChatScreen(
 private fun MessageBubble(
     message: Message,
     isOwn: Boolean,
-    onMapClick: () -> Unit
+    onMapClick: () -> Unit,
+    onImageClick: (String) -> Unit,
+    onPdfClick: (String) -> Unit
 ) {
     val alignment = if (isOwn) Alignment.End else Alignment.Start
 
@@ -163,11 +208,25 @@ private fun MessageBubble(
             )
         ) {
             Column(modifier = Modifier.padding(12.dp)) {
-                Text(
-                    text = message.content,
-                    style = MaterialTheme.typography.bodyLarge,
-                    color = DeepBrown900
-                )
+                // Attachment display
+                if (message.attachmentUrl != null) {
+                    AttachmentContent(
+                        url = message.attachmentUrl,
+                        onImageClick = onImageClick,
+                        onPdfClick = onPdfClick
+                    )
+                    if (message.content.isNotBlank()) {
+                        Spacer(modifier = Modifier.height(8.dp))
+                    }
+                }
+
+                if (message.content.isNotBlank()) {
+                    Text(
+                        text = message.content,
+                        style = MaterialTheme.typography.bodyLarge,
+                        color = DeepBrown900
+                    )
+                }
 
                 Spacer(modifier = Modifier.height(4.dp))
 
@@ -218,52 +277,217 @@ private fun MessageBubble(
 }
 
 @Composable
+private fun AttachmentContent(
+    url: String,
+    onImageClick: (String) -> Unit,
+    onPdfClick: (String) -> Unit
+) {
+    val isImage = url.contains(".jpg", ignoreCase = true) ||
+        url.contains(".jpeg", ignoreCase = true) ||
+        url.contains(".png", ignoreCase = true) ||
+        url.contains(".gif", ignoreCase = true) ||
+        url.contains(".webp", ignoreCase = true) ||
+        url.contains("image", ignoreCase = true)
+
+    val isPdf = url.contains(".pdf", ignoreCase = true)
+
+    when {
+        isImage -> {
+            AsyncImage(
+                model = url,
+                contentDescription = "Attached image",
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(180.dp)
+                    .clip(RoundedCornerShape(8.dp))
+                    .clickable { onImageClick(url) },
+                contentScale = ContentScale.Crop
+            )
+        }
+        isPdf -> {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(8.dp))
+                    .background(GoldAccent400.copy(alpha = 0.15f))
+                    .clickable { onPdfClick(url) }
+                    .padding(12.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(
+                    text = "\uD83D\uDCDC",
+                    style = MaterialTheme.typography.titleLarge
+                )
+                Spacer(modifier = Modifier.width(8.dp))
+                Text(
+                    text = "Scroll attached",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = DeepBrown900,
+                    fontStyle = FontStyle.Italic
+                )
+            }
+        }
+        else -> {
+            // Generic attachment
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(8.dp))
+                    .background(GoldAccent400.copy(alpha = 0.15f))
+                    .clickable { onImageClick(url) }
+                    .padding(12.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(
+                    text = "\uD83D\uDCCE",
+                    style = MaterialTheme.typography.titleLarge
+                )
+                Spacer(modifier = Modifier.width(8.dp))
+                Text(
+                    text = "Attachment",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = DeepBrown900,
+                    fontStyle = FontStyle.Italic
+                )
+            }
+        }
+    }
+}
+
+@Composable
 private fun MessageInputBar(
     text: String,
     onTextChange: (String) -> Unit,
-    onSend: () -> Unit
+    onSend: () -> Unit,
+    onAttachmentSelected: (Uri) -> Unit,
+    pendingAttachmentName: String?,
+    onClearAttachment: () -> Unit,
+    isUploading: Boolean
 ) {
-    Row(
+    val launcher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.GetContent()
+    ) { uri: Uri? ->
+        uri?.let { onAttachmentSelected(it) }
+    }
+
+    Column(
         modifier = Modifier
             .fillMaxWidth()
             .background(MaterialTheme.colorScheme.surface.copy(alpha = 0.95f))
-            .padding(horizontal = 12.dp, vertical = 8.dp),
-        verticalAlignment = Alignment.CenterVertically
     ) {
-        OutlinedTextField(
-            value = text,
-            onValueChange = onTextChange,
-            modifier = Modifier.weight(1f),
-            placeholder = {
+        // Pending attachment indicator
+        if (pendingAttachmentName != null) {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .background(GoldAccent400.copy(alpha = 0.15f))
+                    .padding(horizontal = 12.dp, vertical = 6.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
                 Text(
-                    text = "Inscribe thy message...",
-                    fontStyle = FontStyle.Italic
+                    text = "\uD83D\uDCDC",
+                    style = MaterialTheme.typography.bodyMedium
                 )
-            },
-            // Explicit dark-ink text style so what the user types is always visible
-            textStyle = MaterialTheme.typography.bodyLarge.copy(color = DeepBrown900),
-            colors = parchmentTextFieldColors(),
-            shape = RoundedCornerShape(20.dp),
-            maxLines = 4
-        )
+                Spacer(modifier = Modifier.width(8.dp))
+                Text(
+                    text = pendingAttachmentName,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = DeepBrown700,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.weight(1f)
+                )
+                IconButton(
+                    onClick = onClearAttachment,
+                    modifier = Modifier.size(24.dp)
+                ) {
+                    Icon(
+                        imageVector = Icons.Default.Close,
+                        contentDescription = "Remove attachment",
+                        tint = DeepBrown700,
+                        modifier = Modifier.size(16.dp)
+                    )
+                }
+            }
+        }
 
-        Spacer(modifier = Modifier.width(8.dp))
-
-        // Send button (pigeon release)
-        Box(
+        Row(
             modifier = Modifier
-                .size(48.dp)
-                .clip(CircleShape)
-                .background(MaterialTheme.colorScheme.primary)
-                .clickable(onClick = onSend),
-            contentAlignment = Alignment.Center
+                .fillMaxWidth()
+                .padding(horizontal = 12.dp, vertical = 8.dp),
+            verticalAlignment = Alignment.CenterVertically
         ) {
-            Icon(
-                imageVector = Icons.AutoMirrored.Filled.Send,
-                contentDescription = "Release Pigeon",
-                tint = MaterialTheme.colorScheme.onPrimary,
-                modifier = Modifier.size(24.dp)
+            // Attachment button
+            IconButton(
+                onClick = { launcher.launch("*/*") },
+                enabled = !isUploading
+            ) {
+                Icon(
+                    imageVector = Icons.Default.AttachFile,
+                    contentDescription = "Attach a scroll",
+                    tint = GoldAccent400
+                )
+            }
+
+            OutlinedTextField(
+                value = text,
+                onValueChange = onTextChange,
+                modifier = Modifier.weight(1f),
+                placeholder = {
+                    Text(
+                        text = "Inscribe thy message...",
+                        fontStyle = FontStyle.Italic
+                    )
+                },
+                // Explicit dark-ink text style so what the user types is always visible
+                textStyle = MaterialTheme.typography.bodyLarge.copy(color = DeepBrown900),
+                colors = parchmentTextFieldColors(),
+                shape = RoundedCornerShape(20.dp),
+                maxLines = 4
             )
+
+            Spacer(modifier = Modifier.width(8.dp))
+
+            // Send button (pigeon release)
+            Box(
+                modifier = Modifier
+                    .size(48.dp)
+                    .clip(CircleShape)
+                    .background(MaterialTheme.colorScheme.primary)
+                    .clickable(enabled = !isUploading, onClick = onSend),
+                contentAlignment = Alignment.Center
+            ) {
+                if (isUploading) {
+                    CircularProgressIndicator(
+                        modifier = Modifier.size(24.dp),
+                        color = MaterialTheme.colorScheme.onPrimary
+                    )
+                } else {
+                    Icon(
+                        imageVector = Icons.AutoMirrored.Filled.Send,
+                        contentDescription = "Release Pigeon",
+                        tint = MaterialTheme.colorScheme.onPrimary,
+                        modifier = Modifier.size(24.dp)
+                    )
+                }
+            }
         }
     }
+}
+
+/**
+ * Retrieves the file name from a content URI using the ContentResolver.
+ */
+private fun getFileName(context: android.content.Context, uri: Uri): String? {
+    var name: String? = null
+    val cursor = context.contentResolver.query(uri, null, null, null, null)
+    cursor?.use {
+        if (it.moveToFirst()) {
+            val index = it.getColumnIndex(OpenableColumns.DISPLAY_NAME)
+            if (index >= 0) {
+                name = it.getString(index)
+            }
+        }
+    }
+    return name
 }

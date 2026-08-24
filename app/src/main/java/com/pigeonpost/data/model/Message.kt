@@ -27,5 +27,7 @@ data class Message(
     @SerialName("pigeon_current_lat")
     val pigeonCurrentLat: Double = 0.0,
     @SerialName("pigeon_current_lng")
-    val pigeonCurrentLng: Double = 0.0
+    val pigeonCurrentLng: Double = 0.0,
+    @SerialName("attachment_url")
+    val attachmentUrl: String? = null
 )

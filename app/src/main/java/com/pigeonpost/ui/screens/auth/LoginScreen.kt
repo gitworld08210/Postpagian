@@ -11,6 +11,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CircularProgressIndicator
@@ -51,6 +52,18 @@ fun LoginScreen(
         if (uiState.isAuthenticated) {
             onLoginSuccess()
         }
+    }
+
+    // Forgot Password Dialog
+    if (uiState.showForgotPasswordDialog) {
+        ForgotPasswordDialog(
+            email = uiState.forgotPasswordEmail,
+            onEmailChange = viewModel::updateForgotPasswordEmail,
+            isLoading = uiState.forgotPasswordLoading,
+            message = uiState.forgotPasswordMessage,
+            onSend = viewModel::sendPasswordReset,
+            onDismiss = viewModel::dismissForgotPasswordDialog
+        )
     }
 
     ParchmentBackground {
@@ -121,7 +134,21 @@ fun LoginScreen(
                 )
             }
 
-            Spacer(modifier = Modifier.height(32.dp))
+            Spacer(modifier = Modifier.height(8.dp))
+
+            // Forgot password button - only show in sign-in mode
+            if (!uiState.isSignUp) {
+                TextButton(onClick = viewModel::showForgotPasswordDialog) {
+                    Text(
+                        text = "Forgot thy passphrase?",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = DeepBrown700,
+                        fontStyle = FontStyle.Italic
+                    )
+                }
+            }
+
+            Spacer(modifier = Modifier.height(24.dp))
 
             // Submit button styled as wax seal
             Button(
@@ -169,4 +196,83 @@ fun LoginScreen(
             }
         }
     }
+}
+
+@Composable
+private fun ForgotPasswordDialog(
+    email: String,
+    onEmailChange: (String) -> Unit,
+    isLoading: Boolean,
+    message: String?,
+    onSend: () -> Unit,
+    onDismiss: () -> Unit
+) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = {
+            Text(
+                text = "Recover Thy Passphrase",
+                style = MaterialTheme.typography.titleMedium,
+                color = DeepBrown900
+            )
+        },
+        text = {
+            Column {
+                Text(
+                    text = "Enter thy electronic address and a recovery scroll shall be dispatched.",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = DeepBrown700
+                )
+
+                Spacer(modifier = Modifier.height(16.dp))
+
+                OutlinedTextField(
+                    value = email,
+                    onValueChange = onEmailChange,
+                    label = { Text("Thy Electronic Address") },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth(),
+                    textStyle = MaterialTheme.typography.bodyLarge.copy(color = DeepBrown900),
+                    colors = parchmentTextFieldColors(),
+                    shape = RoundedCornerShape(12.dp),
+                    enabled = !isLoading
+                )
+
+                if (message != null) {
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Text(
+                        text = message,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = if (message.contains("dispatched")) DeepBrown700 else WaxSealRed500
+                    )
+                }
+            }
+        },
+        confirmButton = {
+            Button(
+                onClick = onSend,
+                enabled = !isLoading,
+                colors = ButtonDefaults.buttonColors(
+                    containerColor = MaterialTheme.colorScheme.primary
+                )
+            ) {
+                if (isLoading) {
+                    CircularProgressIndicator(
+                        modifier = Modifier.size(16.dp),
+                        color = MaterialTheme.colorScheme.onPrimary
+                    )
+                } else {
+                    Text("Send Recovery Scroll")
+                }
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) {
+                Text(
+                    text = "Dismiss",
+                    color = DeepBrown700
+                )
+            }
+        }
+    )
 }

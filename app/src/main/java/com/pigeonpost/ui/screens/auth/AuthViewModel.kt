@@ -17,7 +17,11 @@ data class AuthUiState(
     val isSignUp: Boolean = false,
     val isLoading: Boolean = false,
     val error: String? = null,
-    val isAuthenticated: Boolean = false
+    val isAuthenticated: Boolean = false,
+    val showForgotPasswordDialog: Boolean = false,
+    val forgotPasswordEmail: String = "",
+    val forgotPasswordLoading: Boolean = false,
+    val forgotPasswordMessage: String? = null
 )
 
 @HiltViewModel
@@ -80,6 +84,67 @@ class AuthViewModel @Inject constructor(
                         it.copy(
                             isLoading = false,
                             error = e.message ?: "Authentication failed"
+                        )
+                    }
+                }
+            )
+        }
+    }
+
+    fun showForgotPasswordDialog() {
+        _uiState.update {
+            it.copy(
+                showForgotPasswordDialog = true,
+                forgotPasswordEmail = it.email,
+                forgotPasswordMessage = null
+            )
+        }
+    }
+
+    fun dismissForgotPasswordDialog() {
+        _uiState.update {
+            it.copy(
+                showForgotPasswordDialog = false,
+                forgotPasswordEmail = "",
+                forgotPasswordMessage = null
+            )
+        }
+    }
+
+    fun updateForgotPasswordEmail(email: String) {
+        _uiState.update { it.copy(forgotPasswordEmail = email, forgotPasswordMessage = null) }
+    }
+
+    fun sendPasswordReset() {
+        val email = _uiState.value.forgotPasswordEmail.trim()
+        if (email.isBlank()) {
+            _uiState.update { it.copy(forgotPasswordMessage = "Please enter thy electronic address") }
+            return
+        }
+
+        val emailPattern = Regex("^[A-Za-z0-9+_.-]+@[A-Za-z0-9.-]+\\.[A-Za-z]{2,}$")
+        if (!emailPattern.matches(email)) {
+            _uiState.update { it.copy(forgotPasswordMessage = "Please enter a valid email address") }
+            return
+        }
+
+        viewModelScope.launch {
+            _uiState.update { it.copy(forgotPasswordLoading = true, forgotPasswordMessage = null) }
+            val result = authRepository.sendPasswordReset(email)
+            result.fold(
+                onSuccess = {
+                    _uiState.update {
+                        it.copy(
+                            forgotPasswordLoading = false,
+                            forgotPasswordMessage = "A recovery scroll has been dispatched to thy address"
+                        )
+                    }
+                },
+                onFailure = { e ->
+                    _uiState.update {
+                        it.copy(
+                            forgotPasswordLoading = false,
+                            forgotPasswordMessage = e.message ?: "Failed to send recovery scroll"
                         )
                     }
                 }
